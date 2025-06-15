@@ -37,6 +37,10 @@ pub fn Parser::peek(self: Parser) -> Token {
   self.data[self.place]
 }
 
+pub fn Parser::retrace(self: Parser) -> Unit {
+  self.place -= 1;
+}
+
 pub fn Parser::check(self: Parser, ty: TokenType) -> Bool {
   let success = self.peek().isa(ty);
   if (success) {
@@ -80,6 +84,10 @@ pub fn Parser::expect_typename(self: Parser) -> String {
   }
 }
 
+pub fn Parser::strip(self: Parser) -> Unit {
+  while (self.check(Newline)) {}
+}
+
 pub fn Parser::ignore_until(self: Parser, stop: Array[TokenType]) -> Unit {
   stop.push(EOF);
   for c = self.consume(); c.is_any(stop); c = self.consume() { }
@@ -96,35 +104,67 @@ pub fn Parser::typename(self: Parser) -> Type {
   }
 }
 
-pub fn Parser::primary(self: Parser) -> AST {
+pub fn Parser::ifexpr(self: Parser) -> AST {
+  self.strip();
+
   let from = self.peek().loc;
-  match (self.consume()) {
-    { ty: Ident(name), .. } => {
-      return AST::new(VarRef(name), from, self.loc());
+
+  // The initial `if` is already consumed.
+  let cond = self.expr();
+  let body = self.block();
+  let mut other = None;
+  if (self.check(Else)) {
+    other = Some(self.block());
+  }
+  AST::new(If(cond, body, other), from, self.loc());
+}
+
+pub fn Parser::primary(self: Parser) -> AST {
+  self.strip();
+
+  let from = self.peek().loc;
+  let tok = self.consume();
+  match (tok.ty) {
+    Ident(name) =>  AST::new(VarRef(name), from, self.loc());
+    Int(vi) => AST::new(Int(vi), from, self.loc());
+    LPar => {
+      let what = self.expr();
+      self.expect(RPar);
+      what;
     }
-    { ty: Int(vi), .. } => {
-      return AST::new(Int(vi), from, self.loc());
+    EOF => {
+      @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected EOF");
+      AST::new(Leaf, tok.loc, tok.loc);
     }
-    { ty: EOF, loc, len } => {
-      @diag.error(loc, loc.advance(len), "unexpected EOF");
-      return AST::new(Leaf, loc, loc);
+    Semicolon => self.primary();
+    LBrace => {
+      self.retrace();
+      self.block();
     }
-    tok => {
-      @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected token \{tok}");
-      self.ignore_until([Semicolon, Let, RBrace]);
-      return AST::new(Leaf, tok.loc, tok.loc);
+    If => self.ifexpr();
+    Let | RBrace => {
+      self.retrace();
+      AST::new(Leaf, tok.loc, tok.loc);
+    }
+    _ => {
+      @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected token \{tok.ty}");
+      self.ignore_until([Semicolon, Let, RBrace, LBrace]);
+      AST::new(Leaf, tok.loc, tok.loc);
     }
   }
 }
 
-pub fn Parser::add(self: Parser) -> AST {
+pub fn Parser::mul(self: Parser) -> AST {
+  self.strip();
+
   let from = self.peek().loc;
   let mut n = self.primary();
-  while (self.peek().is_any([Plus, Minus])) {
+  while (self.peek().is_any([Star, Slash, Percent])) {
     let kind = match (self.consume().ty) {
-      Plus => Add
-      Minus => Sub
-      _ => panic();
+      Star => Mul
+      Slash => Div
+      Percent => Mod
+      _ => panic()
     }
     let x = self.primary();
     n = AST::new(Binary(kind, n, x), from, self.loc());
@@ -132,11 +172,52 @@ pub fn Parser::add(self: Parser) -> AST {
   return n;
 }
 
+pub fn Parser::add(self: Parser) -> AST {
+  self.strip();
+
+  let from = self.peek().loc;
+  let mut n = self.mul();
+  while (self.peek().is_any([Plus, Minus])) {
+    let kind = match (self.consume().ty) {
+      Plus => Add
+      Minus => Sub
+      _ => panic()
+    }
+    let x = self.mul();
+    n = AST::new(Binary(kind, n, x), from, self.loc());
+  }
+  return n;
+}
+
+pub fn Parser::cmp(self: Parser) -> AST {
+  self.strip();
+
+  let from = self.peek().loc;
+  let mut n = self.add();
+  while (self.peek().is_any([Lt, Gt, Ge, Lt, Ne, Eq])) {
+    let cmp = self.consume().ty;
+    let x = self.add();
+    let binary = match cmp {
+      Lt => Binary(Lt, n, x)
+      Le => Binary(Le, n, x)
+      Gt => Binary(Lt, x, n)
+      Ge => Binary(Le, x, n)
+      Eq => Binary(Eq, n, x)
+      Ne => Binary(Ne, n, x)
+      _ => panic()
+    }
+    n = AST::new(binary, from, self.loc());
+  }
+  return n;
+}
+
 pub fn Parser::expr(self: Parser) -> AST {
-  return self.primary();
+  return self.cmp();
 }
 
 pub fn Parser::stmt(self: Parser) -> AST {
+  self.strip();
+
   let from = self.peek().loc;
   match (self.peek().ty) {
     Let => {
@@ -147,7 +228,7 @@ pub fn Parser::stmt(self: Parser) -> AST {
       if (self.check(Colon)) {
         ty = Some(self.typename());
       }
-      self.expect(Eq);
+      self.expect(Assign);
       let init = self.expr();
       let ast = AST::new(VarDecl(name, init), from, self.loc());
       if (ty is Some(x)) {
@@ -155,11 +236,27 @@ pub fn Parser::stmt(self: Parser) -> AST {
       }
       return ast;
     }
-    _ => self.expr()
+    Return => {
+      self.consume() |> ignore;
+      let expr = self.expr();
+      return AST::new(Return(expr), from, self.loc());
+    }
+    _ => {
+      let expr = self.expr();
+      if (not(self.check(Newline))) {
+        // For a final statement in a block, newline isn't necessary.
+        if (not(self.peek().is_any([RBrace]))) {
+          self.expect(Semicolon);
+        }
+      }
+      return expr;
+    }
   }
 }
 
 pub fn Parser::block(self: Parser) -> AST {
+  self.strip();
+  
   let from = self.peek().loc;
   self.expect(LBrace);
   let content = [];
@@ -174,6 +271,8 @@ pub fn Parser::block(self: Parser) -> AST {
 }
 
 pub fn Parser::fndecl(self: Parser) -> AST {
+  self.strip();
+
   let from = self.peek().loc;
   let name = self.expect_ident();
   let args = [];
@@ -198,10 +297,12 @@ pub fn Parser::fndecl(self: Parser) -> AST {
     }
   }
   let block = self.block();
-  return AST::new(FnDecl(args, block), from, self.loc());
+  return AST::new(FnDecl(name, args, block), from, self.loc());
 }
 
 pub fn Parser::toplevel(self: Parser) -> AST {
+  self.strip();
+
   match (self.consume()) {
     { ty: Fn, .. } => self.fndecl();
     { ty: EOF, loc, len } => {
@@ -220,5 +321,6 @@ pub fn Parser::parse(self: Parser) -> AST {
   if self.data.length() == 0 {
     panic();
   }
-  return self.toplevel();
+  let top = self.toplevel();
+  return top.remove_leaf();
 }

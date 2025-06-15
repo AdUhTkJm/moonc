@@ -1,7 +1,7 @@
 pub struct Lexer {
   mut line: Int
   mut loc: Int
-  data: String
+  data: Array[Char]
   filename: String
 }
 
@@ -10,7 +10,7 @@ pub fn Lexer::new(filename: String, code: String) -> Lexer {
   return {
     line: 0,
     loc: 0,
-    data: code + "\n\u0000",
+    data: (code + "\n\u0000").to_array(),
     filename: filename
   }
 }
@@ -24,19 +24,39 @@ pub fn Lexer::lex(self: Lexer) -> Array[Token] {
 }
 
 fn Lexer::ch(self: Lexer) -> Char {
-  if (self.loc >= self.data.char_length()) {
+  if (self.loc >= self.data.length()) {
     return '\u0000';
   }
-  let ch = String::char_at(self.data, self.loc);
+  let ch = self.data[self.loc];
   self.loc += 1;
   return ch;
 }
 
 fn Lexer::peek(self: Lexer, i: Int) -> Char {
-  if (self.loc + i >= self.data.char_length()) {
+  if (self.loc + i >= self.data.length()) {
     return '\u0000';
   }
-  return String::char_at(self.data, self.loc + i);
+  return self.data[self.loc + i];
+}
+
+fn Lexer::advance(self: Lexer, i: Int) -> Unit {
+  self.loc += i;
+}
+
+fn Lexer::check(self: Lexer, str: String) -> Bool {
+  let len = str.char_length();
+  let arr = str.to_array();
+  for i in @utils.range(len) {
+    if (self.peek(i) != arr[i]) {
+      return false;
+    }
+  }
+  self.advance(len);
+  return true;
+}
+
+fn Lexer::retrace(self: Lexer) -> Unit {
+  self.loc -= 1;
 }
 
 pub fn Lexer::next(self: Lexer) -> Token {
@@ -46,7 +66,6 @@ pub fn Lexer::next(self: Lexer) -> Token {
     '+' => Token::new(Plus, loc, 1) 
     '-' => Token::new(Minus, loc, 1)
     '*' => Token::new(Star, loc, 1)
-    '/' => Token::new(Slash, loc, 1)
     '{' => Token::new(LBrace, loc, 1)
     '}' => Token::new(RBrace, loc, 1) 
     '(' => Token::new(LPar, loc, 1)
@@ -54,16 +73,47 @@ pub fn Lexer::next(self: Lexer) -> Token {
     ',' => Token::new(Comma, loc, 1)
     ';' => Token::new(Semicolon, loc, 1)
     ':' => Token::new(Colon, loc, 1)
-    '=' => Token::new(Eq, loc, 1)
+    '/' => {
+      if (self.check("/")) {
+        for c = self.ch(); not(c is '\n'); c = self.ch() { }
+        self.retrace();
+        return self.next();
+      }
+      Token::new(Slash, loc, 1)
+    }
+    '=' => {
+      if (self.check("=")) {
+        self.advance(1);
+        return Token::new(Eq, loc, 2);
+      }
+      Token::new(Assign, loc, 1)
+    }
+    '<' => {
+      if (self.check("=")) {
+        return Token::new(Le, loc, 2);
+      }
+      Token::new(Lt, loc, 1)
+    }
+    '>' => {
+      if (self.check("=")) {
+        return Token::new(Ge, loc, 2);
+      }
+      Token::new(Gt, loc, 1)
+    }
+    
     'a'..='z' | '_' => {
       let name = [c];
       for c = self.ch(); c is ('a'..='z' | 'A' ..= 'Z' | '_'); c = self.ch() {
         name.push(c);
       }
+      self.retrace();
       let str = String::from_array(name);
       match str {
         "let" => Token::new(Let, loc, 3)
         "fn" => Token::new(Fn, loc, 2)
+        "return" => Token::new(Return, loc, 6)
+        "if" => Token::new(If, loc, 2)
+        "else" => Token::new(Else, loc, 4)
         _ => Token::new(Ident(str), loc, name.length());
       }
     }
@@ -72,18 +122,21 @@ pub fn Lexer::next(self: Lexer) -> Token {
       for c = self.ch(); c is ('a'..='z' | 'A' ..= 'Z' | '_'); c = self.ch() {
         name.push(c);
       }
+      self.retrace();
       Token::new(Typename(String::from_array(name)), loc, name.length());
     }
-    '\n' => { self.line += 1; self.next() }
+    '\n' => { self.line += 1; Token::new(Newline, loc.advance(-1), 0) }
     ' ' | '\r' | '\t' => self.next()
     '0'..='9' => {
       let digits = [c];
       if (self.peek(1) == 'x') {
         digits.push(self.ch());
       }
-      for c = self.ch(); c is ('0'..='9' | 'x'); c = self.ch() {
+      for c = self.ch(); c is '0'..='9'; c = self.ch() {
         digits.push(c);
       }
+      // We're one step away.
+      self.retrace();
       let str = String::from_array(digits);
       match (try? @strconv.parse_int(str)) {
         Ok(x) => Token::new(Int(x), loc, digits.length());
@@ -101,5 +154,5 @@ pub fn Lexer::next(self: Lexer) -> Token {
 }
 
 pub fn Lexer::has_next(self: Lexer) -> Bool {
-  return self.loc < self.data.length() - 1 && self.data.char_at(self.loc + 1) != '\u0000';
+  return self.loc < self.data.length() - 1 && self.peek(1) != '\u0000';
 }

@@ -9,6 +9,9 @@ pub(all) enum TokenType {
   // Keywords
   Let
   Fn
+  Return
+  If
+  Else
 
   // Operators
   LBrace            // {
@@ -22,15 +25,23 @@ pub(all) enum TokenType {
   Minus             // -
   Star              // *
   Slash             // /
+  Percent           // %
   Ques              // ?
   Bang              // !
   Comma             // ,
   Colon             // :
-  Eq                // =
+  Assign            // =
+  Eq                // ==
+  Lt                // <
+  Le                // <=
+  Gt                // >
+  Ge                // >=
+  Ne                // !=
 
   // Special
   EOF
   Unknown
+  Newline
 } derive(Eq, Hash)
 
 pub impl Show for TokenType with to_string(self) -> String {
@@ -42,6 +53,7 @@ pub impl Show for TokenType with to_string(self) -> String {
     Ques => "'?'"
     Slash => "'/'"
     Star => "'*'"
+    Percent => "'%'"
     Minus => "'-'"
     Plus => "'+'"
     LPar => "'('"
@@ -51,15 +63,25 @@ pub impl Show for TokenType with to_string(self) -> String {
     Semicolon => "';'"
     LBrace => "'{'"
     RBrace => "'}'"
-    Eq => "'='"
+    Assign => "'='"
+    Eq => "'=='"
+    Le => "'<='"
+    Lt => "'<'"
+    Gt => "'>'"
+    Ge => "'>='"
+    Ne => "'!='"
     Fn => "fn"
     Let => "let"
+    Return => "return"
+    If => "if"
+    Else => "else"
     Str(_) => "string literal"
     FP(_) => "floating-point literal"
     Int(_) => "integer literal"
     Typename(_) => "type name"
     Ident(_) => "identifier"
     Unknown => "unknown"
+    Newline => "newline"
   }
 }
 
