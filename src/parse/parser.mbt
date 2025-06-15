@@ -42,11 +42,12 @@ pub fn Parser::retrace(self: Parser) -> Unit {
 }
 
 pub fn Parser::check(self: Parser, ty: TokenType) -> Bool {
-  let success = self.peek().isa(ty);
-  if (success) {
-    let _ = self.consume();
+  let old = self.place;
+  if (not(self.consume().isa(ty))) {
+    self.place = old;
+    return false;
   }
-  return success;
+  return true;
 }
 
 pub fn Parser::expect(self: Parser, ty: TokenType) -> Unit {
@@ -85,14 +86,14 @@ pub fn Parser::expect_typename(self: Parser) -> String {
 }
 
 pub fn Parser::strip(self: Parser) -> Unit {
-  while (self.check(Newline)) {}
+  while (self.place < self.data.length() && self.data[self.place].isa(Newline)) {
+    self.place += 1;
+  }
 }
 
 pub fn Parser::ignore_until(self: Parser, stop: Array[TokenType]) -> Unit {
   stop.push(EOF);
-  for c = self.consume(); c.is_any(stop); c = self.consume() { }
-  // This has been consumed; we need to put it back.
-  self.place -= 1;
+  for c = self.consume(); not(c.is_any(stop)); c = self.consume() { }
 }
 
 pub fn Parser::typename(self: Parser) -> Type {
@@ -105,8 +106,6 @@ pub fn Parser::typename(self: Parser) -> Type {
 }
 
 pub fn Parser::ifexpr(self: Parser) -> AST {
-  self.strip();
-
   let from = self.peek().loc;
 
   // The initial `if` is already consumed.
@@ -120,45 +119,50 @@ pub fn Parser::ifexpr(self: Parser) -> AST {
 }
 
 pub fn Parser::primary(self: Parser) -> AST {
-  self.strip();
-
   let from = self.peek().loc;
   let tok = self.consume();
   match (tok.ty) {
-    Ident(name) =>  AST::new(VarRef(name), from, self.loc());
+    Ident(name) => AST::new(VarRef(name), from, self.loc());
     Int(vi) => AST::new(Int(vi), from, self.loc());
     LPar => {
       let what = self.expr();
       self.expect(RPar);
       what;
     }
-    EOF => {
-      @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected EOF");
-      AST::new(Leaf, tok.loc, tok.loc);
-    }
-    Semicolon => self.primary();
     LBrace => {
       self.retrace();
       self.block();
     }
     If => self.ifexpr();
-    Let | RBrace => {
-      self.retrace();
-      AST::new(Leaf, tok.loc, tok.loc);
-    }
     _ => {
       @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected token \{tok.ty}");
-      self.ignore_until([Semicolon, Let, RBrace, LBrace]);
+      self.ignore_until([Semicolon, Let, RBrace, Newline]);
       AST::new(Leaf, tok.loc, tok.loc);
     }
   }
 }
 
-pub fn Parser::mul(self: Parser) -> AST {
-  self.strip();
-
+pub fn Parser::call(self: Parser) -> AST {
   let from = self.peek().loc;
-  let mut n = self.primary();
+  let n = self.primary();
+  
+  if (not(self.check(LPar))) {
+    return n;
+  }
+
+  let args = [];
+  while (not(self.check(RPar))) {
+    args.push(self.expr());
+    if (not(self.peek().isa(RPar))) {
+      self.expect(Comma);
+    }
+  }
+  return AST::new(Call(n, args), from, self.loc())
+}
+
+pub fn Parser::mul(self: Parser) -> AST {
+  let from = self.peek().loc;
+  let mut n = self.call();
   while (self.peek().is_any([Star, Slash, Percent])) {
     let kind = match (self.consume().ty) {
       Star => Mul
@@ -166,15 +170,13 @@ pub fn Parser::mul(self: Parser) -> AST {
       Percent => Mod
       _ => panic()
     }
-    let x = self.primary();
+    let x = self.call();
     n = AST::new(Binary(kind, n, x), from, self.loc());
   }
   return n;
 }
 
 pub fn Parser::add(self: Parser) -> AST {
-  self.strip();
-
   let from = self.peek().loc;
   let mut n = self.mul();
   while (self.peek().is_any([Plus, Minus])) {
@@ -190,8 +192,6 @@ pub fn Parser::add(self: Parser) -> AST {
 }
 
 pub fn Parser::cmp(self: Parser) -> AST {
-  self.strip();
-
   let from = self.peek().loc;
   let mut n = self.add();
   while (self.peek().is_any([Lt, Gt, Ge, Lt, Ne, Eq])) {
@@ -215,9 +215,15 @@ pub fn Parser::expr(self: Parser) -> AST {
   return self.cmp();
 }
 
-pub fn Parser::stmt(self: Parser) -> AST {
-  self.strip();
+pub fn Parser::semicolon(self: Parser) -> Unit {
+  let has_semicolon = self.check(Semicolon);
+  let omissible = self.check(Newline) || self.peek().is_any([RBrace]);
+  if (not(has_semicolon) && not(omissible)) {
+    self.expect(Semicolon);
+  }
+}
 
+pub fn Parser::stmt(self: Parser) -> AST {
   let from = self.peek().loc;
   match (self.peek().ty) {
     Let => {
@@ -230,6 +236,7 @@ pub fn Parser::stmt(self: Parser) -> AST {
       }
       self.expect(Assign);
       let init = self.expr();
+      self.semicolon();
       let ast = AST::new(VarDecl(name, init), from, self.loc());
       if (ty is Some(x)) {
         ast.ty = x;
@@ -239,16 +246,12 @@ pub fn Parser::stmt(self: Parser) -> AST {
     Return => {
       self.consume() |> ignore;
       let expr = self.expr();
+      self.semicolon();
       return AST::new(Return(expr), from, self.loc());
     }
     _ => {
       let expr = self.expr();
-      if (not(self.check(Newline))) {
-        // For a final statement in a block, newline isn't necessary.
-        if (not(self.peek().is_any([RBrace]))) {
-          self.expect(Semicolon);
-        }
-      }
+      self.semicolon();
       return expr;
     }
   }
@@ -256,12 +259,13 @@ pub fn Parser::stmt(self: Parser) -> AST {
 
 pub fn Parser::block(self: Parser) -> AST {
   self.strip();
-  
   let from = self.peek().loc;
   self.expect(LBrace);
   let content = [];
+  self.strip();
   while (not(self.check(RBrace))) {
     content.push(self.stmt());
+    self.strip();
     if (self.check(EOF)) {
       @diag.error(from, from.advance(1), "left brace is never closed");
       break;
@@ -272,7 +276,6 @@ pub fn Parser::block(self: Parser) -> AST {
 
 pub fn Parser::fndecl(self: Parser) -> AST {
   self.strip();
-
   let from = self.peek().loc;
   let name = self.expect_ident();
   let args = [];
@@ -301,20 +304,23 @@ pub fn Parser::fndecl(self: Parser) -> AST {
 }
 
 pub fn Parser::toplevel(self: Parser) -> AST {
-  self.strip();
+  let top = [];
 
-  match (self.consume()) {
-    { ty: Fn, .. } => self.fndecl();
-    { ty: EOF, loc, len } => {
-      @diag.error(loc, loc.advance(len), "unexpected EOF");
-      return AST::new(Leaf, loc, loc);
-    }
-    tok => {
-      @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected top-level token \{tok.ty}");
-      self.ignore_until([Fn, Let]);
-      return self.toplevel();
+  while (not(self.peek().isa(EOF))) {
+    let tok = self.consume();
+    match (tok.ty) {
+      Fn => top.push(self.fndecl());
+      EOF => break;
+      Newline => continue;
+      _ => {
+        @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected top-level token \{tok.ty}");
+        self.ignore_until([Fn]);
+        self.retrace();
+        continue;
+      }
     }
   }
+  return AST::new(Block(top), self.data[0].loc, self.loc());
 }
 
 pub fn Parser::parse(self: Parser) -> AST {

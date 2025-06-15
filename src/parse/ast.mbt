@@ -25,6 +25,7 @@ pub(all) enum ASTType {
   VarRef(String)
   Return(AST)
   Int(Int)
+  Call(AST, Array[AST])
   Leaf
 }
 
@@ -88,7 +89,7 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
     VarRef(name) => name
     Block(arr) => {
       let builder = StringBuilder::new();
-      let indent = String::make(2 * (depth - 1), ' ');
+      let indent = String::make(@math.maximum(2 * (depth - 1), 0), ' ');
       builder.write_string("{\n");
       for x in arr {
         builder.write_string("  \{indent}\{dep_str(x.kind, depth)};\n");
@@ -114,6 +115,10 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
       builder.to_string();
     }
     Return(ast) => "return \{dep_str(ast.kind, depth)}"
+    Call(call, args) => {
+      let args = args.map(fn (x) { dep_str(x.kind, depth) }).join(", ");
+      "\{dep_str(call.kind, depth)}(\{args})";
+    }
     Leaf => "<leaf>"
   }
 }
@@ -142,7 +147,8 @@ pub fn ASTType::map(self: ASTType, f: (ASTType) -> ASTType) -> ASTType {
     Binary(kind, l, r) => f(Binary(kind, l.map(f), r.map(f)))
     Block(body) => f(Block(body.map(fn (x) { x.map(f) })))
     Return(x) => f(Return(x.map(f)))
-    _ => f(self)
+    Call(x, args) => f(Call(x.map(f), args.map(fn (x) { x.map(f) })));
+    Int(_) | VarRef(_) | ParamDecl(_) | Leaf => f(self)
   }
 }
 

@@ -58,22 +58,17 @@ pub fn report() -> Bool {
       println("  ^^^^^");
     }
 
-    if (frominfo.line != toinfo.line) {
+    let line = file.lines[frominfo.line - 1];
+    let col = frominfo.col;
+    let space = String::make(col - 1, ' ');
+    let sign = if (frominfo.line != toinfo.line) {
       // Only show the line on `from`.
-      let line = file.lines[frominfo.line - 1];
-      let col = frominfo.col;
-      let space = String::from_array(Array::make(col - 1, ' '));
-      let sign = String::from_array(Array::make(line.length() + 1 - col, '^'));
-      println("  \{line}");
-      println("  \{space}\{sign}");
+      line.length() + 1 - col;
     } else {
-      let line = file.lines[frominfo.line - 1];
-      let col = frominfo.col;
-      let space = String::from_array(Array::make(col - 1, ' '));
-      let sign = String::from_array(Array::make(toinfo.col - col, '^'));
-      println("  \{line}");
-      println("  \{space}\{sign}");
+      @math.maximum(toinfo.col - col, 1);
     }
+    println("  \{line}");
+    println("  \{space}\{String::make(sign, '^')}");
   }
   return false;
 }
