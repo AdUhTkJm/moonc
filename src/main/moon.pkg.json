@@ -1,0 +1,7 @@
+{
+  "is-main": true,
+  "import": [
+    "AdUhTkJm/moonc/parse",
+    "AdUhTkJm/moonc/diag"
+  ]
+}
