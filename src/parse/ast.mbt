@@ -92,9 +92,9 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
       let indent = String::make(@math.maximum(2 * (depth - 1), 0), ' ');
       builder.write_string("{\n");
       for x in arr {
-        builder.write_string("  \{indent}\{dep_str(x.kind, depth)};\n");
+        builder.write_string("  \{indent}\{dep_str(x.kind, depth + 1)};\n");
       }
-      builder.write_string("\{indent}}\n");
+      builder.write_string("\{indent}}");
       builder.to_string();
     }
     Binary(kind, l, r) => "(\{dep_str(l.kind, depth)} \{kind} \{dep_str(r.kind, depth)})"
@@ -110,8 +110,8 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
     If(cond, l, r) => {
       let builder = StringBuilder::new();
       builder.write_string("if \{cond} ");
-      builder.write_string(dep_str(l.kind, depth + 1));
-      builder.write_string(r.map_or("", fn(x) { dep_str(x.kind, depth + 1) }));
+      builder.write_string(dep_str(l.kind, depth));
+      builder.write_string(r.map_or("", fn(x) { dep_str(x.kind, depth) }));
       builder.to_string();
     }
     Return(ast) => "return \{dep_str(ast.kind, depth)}"
