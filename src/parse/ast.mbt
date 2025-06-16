@@ -46,10 +46,12 @@ pub(all) enum ASTType {
   Binary(BinaryKind, AST, AST)
   BinaryInplace(BinaryKind, AST, AST)
   Block(Array[AST])
-  VarRef(String)
+  VarRef(Name)
+  FieldRef(AST, String)
   Return(Option[AST])
   Int(Int)
   Call(AST, Array[AST])
+  ThisCall(AST, String, Array[AST])
   Double(Double)
   Float(Float)
   Leaf
@@ -62,7 +64,10 @@ pub(all) enum Type {
   Tuple(Array[Type])
   Int
   Float
+  Unit
+  Double
   Unknown
+  Weak(Type)
 } derive (Show)
 
 pub(all) struct AST {
@@ -144,7 +149,7 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
     Int(vi) => "\{vi}"
     Double(vd) => "\{vd}"
     Float(vf) => "\{vf}F"
-    VarRef(name) => name
+    VarRef(name) => "\{name}"
     Block(arr) => {
       let builder = StringBuilder::new();
       let indent = String::make(@math.maximum(2 * (depth - 1), 0), ' ');
@@ -205,6 +210,11 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
       let args = args.map(fn (x) { dep_str(x.kind, depth) }).join(", ");
       "\{dep_str(call.kind, depth)}(\{args})";
     }
+    ThisCall(this, name, args) => {
+      let args = args.map(fn (x) { dep_str(x.kind, depth) }).join(", ");
+      "\{dep_str(this.kind, depth)}.\{name}(\{args})";
+    }
+    FieldRef(x, name) => "\{dep_str(x.kind, depth)}.\{name}"
     Leaf => "<leaf>"
   }
 }
@@ -225,29 +235,33 @@ pub impl Show for AST with output(self, writer) -> Unit {
   writer.write_string(self.to_string());
 }
 
-pub fn ASTType::map(self: ASTType, f: (ASTType) -> ASTType) -> ASTType {
-  match self {
-    FnDecl(visible, name, params, body) => f(FnDecl(visible, name, params, body.map(f)))
-    VarDecl(name, mutable, init) => f(VarDecl(name, mutable, init.map(f)))
-    If(cond, l, r) => f(If(cond.map(f), l.map(f), r.map(fn (x) { x.map(f) })))
-    Binary(kind, l, r) => f(Binary(kind, l.map(f), r.map(f)))
-    BinaryInplace(kind, l, r) => f(BinaryInplace(kind, l.map(f), r.map(f)))
-    Block(body) => f(Block(body.map(fn (x) { x.map(f) })))
-    Return(x) => f(Return(x.map(fn (x) { x.map(f) })))
-    Call(x, args) => f(Call(x.map(f), args.map(fn (x) { x.map(f) })));
-    StructInit(map) => f(StructInit(Map::from_array(map.to_array().map(fn (t) { (t.0, t.1.map(f)) }))))
-    Int(_) | VarRef(_) | ParamDecl(_) | Leaf | StructDecl(_) | Double(_) | Float(_) => f(self)
-  }
-}
-
-pub fn AST::map(self: AST, f: (ASTType) -> (ASTType)) -> AST {
-  { kind: self.kind.map(f), from: self.from, to: self.to, ty: self.ty }
+pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
+  let mapper = fn (x: AST) { x.map(f) };
+  f({ kind:
+  match self.kind {
+    FnDecl(visible, name, params, body) => FnDecl(visible, name, params, body.map(f))
+    VarDecl(name, mutable, init) => VarDecl(name, mutable, init.map(f))
+    If(cond, l, r) => If(cond.map(f), l.map(f), r.map(mapper))
+    Binary(kind, l, r) => Binary(kind, l.map(f), r.map(f))
+    BinaryInplace(kind, l, r) => BinaryInplace(kind, l.map(f), r.map(f))
+    Block(body) => Block(body.map(mapper))
+    Return(x) => Return(x.map(mapper))
+    Call(x, args) => Call(x.map(f), args.map(mapper));
+    ThisCall(x, name, args) => ThisCall(x.map(f), name, args.map(mapper));
+    FieldRef(x, name) => FieldRef(x.map(f), name)
+    StructInit(map) => StructInit(Map::from_array(map.to_array().map(fn (t) { (t.0, t.1.map(f)) })))
+    Int(_) | VarRef(_) | ParamDecl(_) | Leaf | StructDecl(_) | Double(_) | Float(_) => self.kind
+  },
+    from: self.from,
+    to: self.to,
+    ty: self.ty
+  });
 }
 
 pub fn AST::remove_leaf(self: AST) -> AST {
   self.map(fn (x) {
     match x {
-      Block(arr) => Block(arr.filter(fn (x) { not(x.kind is Leaf) }))
+      { kind: Block(arr), .. } => { kind: Block(arr.filter(fn (x) { not(x.kind is Leaf) })), from: x.from, to: x.to, ty: x.ty }
       _ => x
     }
   })

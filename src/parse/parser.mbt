@@ -126,6 +126,8 @@ pub fn Parser::typename(self: Parser) -> Type {
   match (ty) {
     "Int" => Int
     "Float" => Float
+    "Double" => Double
+    "Unit" => Unit
     _ => Named(ty, [])
   }
 }
@@ -155,7 +157,7 @@ pub fn Parser::primary(self: Parser) -> AST {
   let from = self.peek().loc;
   let tok = self.consume();
   match (tok.ty) {
-    Ident(name) => AST::new(VarRef(name), from, self.loc());
+    Ident(name) => AST::new(VarRef(self.unqualified(name)), from, self.loc());
     Int(vi) => AST::new(Int(vi), from, self.loc());
     Double(vd) => AST::new(Double(vd), from, self.loc());
     Float(vf) => AST::new(Float(vf), from, self.loc());
@@ -192,6 +194,14 @@ pub fn Parser::primary(self: Parser) -> AST {
     }
     If => self.ifexpr();
     Fn => self.fndecl(Priv);
+    Typename(ty) => {
+      // Ty::field
+      self.expect(ColonColon);
+      let name = self.expect_ident();
+      println(name);
+      println(self.peek());
+      AST::new(VarRef(self.qualified(ty, name)), from, self.loc());
+    }
     _ => {
       @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected token \{tok.ty}");
       self.ignore_until([Semicolon, Let, RBrace, Newline]);
@@ -200,27 +210,38 @@ pub fn Parser::primary(self: Parser) -> AST {
   }
 }
 
-pub fn Parser::call(self: Parser) -> AST {
+pub fn Parser::postfix(self: Parser) -> AST {
   let from = self.peek().loc;
-  let n = self.primary();
+  let mut n = self.primary();
   
-  if (not(self.check(LPar))) {
-    return n;
+  while (self.peek().is_any([LPar, Dot])) {
+    if (self.check(Dot)) {
+      let field = self.expect_ident();
+      n = AST::new(FieldRef(n, field), from, self.loc());
+      continue;
+    }
+
+    if (self.check(LPar)) {
+      let args = [];
+      while (not(self.check(RPar)) && not(self.peek().isa(EOF))) {
+        args.push(self.expr());
+        if (not(self.peek().isa(RPar))) {
+          self.expect(Comma);
+        }
+      }
+      n = AST::new(Call(n, args), from, self.loc())
+      continue;
+    }
+
+    panic();
   }
 
-  let args = [];
-  while (not(self.check(RPar)) && not(self.peek().isa(EOF))) {
-    args.push(self.expr());
-    if (not(self.peek().isa(RPar))) {
-      self.expect(Comma);
-    }
-  }
-  return AST::new(Call(n, args), from, self.loc())
+  return n;
 }
 
 pub fn Parser::mul(self: Parser) -> AST {
   let from = self.peek().loc;
-  let mut n = self.call();
+  let mut n = self.postfix();
   while (self.peek().is_any([Star, Slash, Percent])) {
     let kind = match (self.consume().ty) {
       Star => Mul
@@ -228,7 +249,7 @@ pub fn Parser::mul(self: Parser) -> AST {
       Percent => Mod
       _ => panic()
     }
-    let x = self.call();
+    let x = self.postfix();
     n = AST::new(Binary(kind, n, x), from, self.loc());
   }
   return n;

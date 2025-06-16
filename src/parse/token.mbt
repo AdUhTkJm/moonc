@@ -21,6 +21,13 @@ pub(all) enum TokenType {
   While
   For
   Mut
+  Enum
+  Trait
+  Impl
+  With
+  Match
+  Extern
+  Type
 
   // Operators
   LBrace            // {
@@ -110,6 +117,13 @@ pub impl Show for TokenType with to_string(self) -> String {
     While => "while"
     For => "for"
     Mut => "mut"
+    Enum => "enum"
+    Trait => "trait"
+    Match => "match"
+    Impl => "impl"
+    With => "with"
+    Extern => "extern"
+    Type => "type"
     Str(x) => "string literal \"\{x}\""
     Double(x) => "double literal \{x}"
     Float(x) => "float literal \{x}"

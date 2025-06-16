@@ -205,10 +205,25 @@ pub fn Lexer::next(self: Lexer) -> Token {
         "if" => Token::new(If, loc, 2)
         "else" => Token::new(Else, loc, 4)
         "struct" => Token::new(Struct, loc, 6)
-        "pub" => Token::new(Pub, loc, 3)
         "while" => Token::new(While, loc, 5)
         "for" => Token::new(For, loc, 3)
         "mut" => Token::new(Mut, loc, 3)
+        "enum" => Token::new(Enum, loc, 4)
+        "trait" => Token::new(Trait, loc, 5)
+        "impl" => Token::new(Impl, loc, 4)
+        "with" => Token::new(With, loc, 4)
+        "match" => Token::new(Match, loc, 5)
+        "extern" => Token::new(Extern, loc, 6)
+        "type" => Token::new(Type, loc, 4)
+        "pub" => {
+          if (self.check("(all)")) {
+            return Token::new(Puball, loc, 8);
+          }
+          if (self.check("(open)")) {
+            return Token::new(Pubopen, loc, 9);
+          }
+          Token::new(Pub, loc, 3)
+        }
         _ => Token::new(Ident(str), loc, name.length());
       }
     }
