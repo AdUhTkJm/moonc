@@ -17,13 +17,13 @@ priv struct FileInfo {
 priv struct DiagEnv {
   // Maps filenames to the code in it.
   content: Map[String, FileInfo]
-  diags: Array[Diag]
+  errors: Array[Diag]
 };
 
-let env: DiagEnv = { content: Map::new(), diags: [] };
+let env: DiagEnv = { content: Map::new(), errors: [] };
 
 pub fn error(from: Loc, to: Loc, msg: String) -> Unit {
-  env.diags.push({ from: from, to: to, msg: msg });
+  env.errors.push({ from: from, to: to, msg: msg });
 }
 
 pub fn add_file(filename: String, code: String) -> Unit {
@@ -44,11 +44,11 @@ pub fn add_file(filename: String, code: String) -> Unit {
 }
 
 pub fn report() -> Bool {
-  if (env.diags.is_empty()) {
+  if (env.errors.is_empty()) {
     return true;
   }
   
-  for diag in env.diags {
+  for diag in env.errors {
     println("\{diag.from}: error: \{diag.msg}")
     if (diag.from.unknown || diag.to.unknown) {
       continue;
@@ -75,6 +75,10 @@ pub fn report() -> Bool {
     println("  \{space}\{String::make(sign, '^')}");
   }
   return false;
+}
+
+pub fn errcnt() -> Int {
+  return env.errors.length();
 }
 
 fn FileInfo::find(self: FileInfo, charpos: Int) -> PosResult {

@@ -8,11 +8,13 @@ pub(all) enum BinaryKind {
   Le
   Eq
   Ne
+  Assign
 } derive(Eq, Hash)
 
 pub(all) enum UnaryKind {
   Not
   Minus
+  Try
 } derive(Eq, Hash)
 
 pub(all) enum Visible {
@@ -46,6 +48,10 @@ pub fn Name::qualified(pack: Option[String], namespace: String, x: String) -> Na
   { pack: pack, namespace: Some(namespace), name: x }
 }
 
+pub fn Name::pack(self: Name, pack: String) -> Name {
+  { ..self, pack: Some(pack) }
+}
+
 pub(all) enum ASTType {
   FnDecl(Visible, Name, Array[String], AST)
   StructDecl(Visible, Name, Array[(String, Type)])
@@ -68,6 +74,7 @@ pub(all) enum ASTType {
   Double(Double)
   Float(Float)
   Str(String)
+  Fstr(Array[AST])
   Bool(Bool)
   Arr(Array[AST])
   Continue
@@ -78,6 +85,7 @@ pub(all) enum ASTType {
   Match(AST, Array[(Pattern, AST)])
   IncRange(AST, AST)
   ExcRange(AST, AST)
+  ArrAccess(AST, AST)
   Leaf
 }
 
@@ -121,6 +129,7 @@ pub impl Show for BinaryKind with to_string(self) -> String {
     Le => "<="
     Eq => "=="
     Ne => "!="
+    Assign => "="
   }
 }
 
@@ -132,6 +141,7 @@ pub impl Show for UnaryKind with to_string(self) -> String {
   match self {
     Not => "!"
     Minus => "-"
+    Try => "try?"
   }
 }
 
@@ -175,7 +185,7 @@ pub impl Show for Pattern with output(self, writer) -> Unit {
 pub impl Show for Name with to_string(self) -> String {
   let builder = StringBuilder::new();
   if (self.pack is Some(pack)) {
-    builder.write_string("@\{pack}.");
+    builder.write_string("\{pack}.");
   }
   if (self.namespace is Some(namespace)) {
     builder.write_string("\{namespace}::");
@@ -196,6 +206,7 @@ fn dep_str(ast: AST, depth: Int) -> String {
     Str(vs) => "R\"(\{vs})\""
     VarRef(name) => "\{name}"
     Bool(vb) => "\{vb}"
+    Fstr(vs) => "F:" + vs.map(fn (x) { dep_str(x, depth) }).join("") + ":F"
     Arr(arr) => {
       let s = arr.map(fn (x) { dep_str(x, depth) }).join(", ");
       "[\{s}]"
@@ -305,6 +316,7 @@ fn dep_str(ast: AST, depth: Int) -> String {
     }
     IncRange(begin, end) => "\{dep_str(begin, depth)}..=\{dep_str(end, depth)}"
     ExcRange(begin, end) => "\{dep_str(begin, depth)}..<\{dep_str(end, depth)}"
+    ArrAccess(begin, end) => "\{dep_str(begin, depth)}[\{dep_str(end, depth)}]"
     Match(matcher, arr) => {
       let indent = String::make(@math.maximum(2 * (depth - 1), 0), ' ');
       let s = arr.map(fn (t) {
@@ -357,7 +369,9 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     EnumConstr(name, arr) => EnumConstr(name, arr.map(f))
     IncRange(x, y) => IncRange(x.map(f), y.map(f))
     ExcRange(x, y) => ExcRange(x.map(f), y.map(f))
+    ArrAccess(x, y) => ArrAccess(x.map(f), y.map(f))
     Match(matcher, arr) => Match(matcher.map(f), arr.map(fn (t) { (t.0, t.1.map(f)) }))
+    Fstr(vs) => Fstr(vs.map(f))
     Int(_) | VarRef(_) | ParamDecl(_) | Leaf |
     StructDecl(_) | Double(_) | Float(_) | Str(_) |
     Continue | EnumDecl(_) | Bool(_) => self.kind

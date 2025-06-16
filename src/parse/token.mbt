@@ -7,6 +7,7 @@ pub(all) enum TokenType {
   Float(Float)      // Float literal
   Str(String)       // "[^"]*"
   Char(Char)        // '?'
+  Packname(String)  // @[\w\d_]+
 
   // Keywords
   Let
@@ -34,6 +35,7 @@ pub(all) enum TokenType {
   True
   False
   In
+  Try
 
   // Operators
   LBrace            // {
@@ -70,6 +72,11 @@ pub(all) enum TokenType {
   Dot               // .
   IncRange          // ..=
   ExcRange          // ..<
+  Bitand            // &
+  Bitor             // |
+  Bitxor            // ^
+  Logand            // &&
+  Logor             // ||
 
   // Special
   EOF
@@ -114,6 +121,11 @@ pub impl Show for TokenType with to_string(self) -> String {
     Dot => "'.'"
     IncRange => "'..='"
     ExcRange => "'..<'"
+    Bitand => "'&'"
+    Bitor => "'|'"
+    Bitxor => "'^'"
+    Logand => "'&&'"
+    Logor => "'||'"
     Fn => "fn"
     Let => "let"
     Return => "return"
@@ -139,6 +151,7 @@ pub impl Show for TokenType with to_string(self) -> String {
     True => "true"
     False => "false"
     In => "in"
+    Try => "try"
     Str(x) => "string literal \"\{x}\""
     Double(x) => "double literal \{x}"
     Float(x) => "float literal \{x}"
@@ -146,6 +159,7 @@ pub impl Show for TokenType with to_string(self) -> String {
     Typename(x) => "type name '\{x}'"
     Ident(x) => "identifier '\{x}'"
     Char(x) => "char '\{x}'"
+    Packname(x) => "package name '\{x}'"
     Unknown => "unknown"
     Newline => "newline"
   }
@@ -177,6 +191,7 @@ pub fn Token::isa(self: Token, ty: TokenType) -> Bool {
     (Float(_), Float(_)) => true
     (Str(_), Str(_)) => true
     (Char(_), Char(_)) => true
+    (Packname(_), Packname(_)) => true
     _ => false
   }
 }

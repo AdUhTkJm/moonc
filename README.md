@@ -79,8 +79,8 @@ The outer braces are due to a `Block` node that encloses the whole file, which m
 
 # Progress
 
+Currently the compiler is able to parse parts of itself.
+
 Unsupported parsing features:
 
 - Traits;
-- Types with arguments;
-- While and For.

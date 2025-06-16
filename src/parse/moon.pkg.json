@@ -1,6 +1,7 @@
 {
   "import": [
     "AdUhTkJm/moonc/diag",
-    "AdUhTkJm/moonc/utils"
+    "AdUhTkJm/moonc/utils",
+    "Yoorkin/ArgParser"
   ]
 }

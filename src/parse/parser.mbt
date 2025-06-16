@@ -2,10 +2,11 @@ pub struct Parser {
   mut place: Int
   data: Array[Token]
   pack: Option[String]
+  filename: String
 }
 
-pub fn Parser::new(pack: Option[String], tokens: Array[Token]) -> Parser {
-  return { place: 0, data: tokens, pack: pack }
+pub fn Parser::new(pack: Option[String], filename: String, tokens: Array[Token]) -> Parser {
+  return { place: 0, data: tokens, pack: pack, filename: filename }
 }
 
 pub fn Parser::eof_loc(self: Parser) -> @diag.Loc {
@@ -63,9 +64,9 @@ pub fn Parser::consumes(self: Parser) -> Token {
     return Token::new(EOF, self.eof_loc(), 0);
   }
 
+  self.strip();
   let t = self.data[self.place];
   self.place += 1;
-  self.strip();
   return t;
 }
 
@@ -267,6 +268,101 @@ pub fn Parser::matchexpr(self: Parser) -> AST {
   AST::new(Match(matcher, branches), from, self.loc());
 }
 
+pub fn Parser::fstr(self: Parser, str_: String) -> AST {
+  let from = self.peek().loc.advance(-str_.length());
+  let str = str_.to_array();
+  let mut pos = 0;
+  let chunks = [];
+
+  let ch = fn () {
+    let c = str[pos];
+    pos += 1;
+    return c;
+  }
+  let current = [];
+
+  while (pos < str.length()) {
+    match ch() {
+    '\\' => {
+      let next = ch();
+      match next {
+      'n'  => current.push('\n')
+      't'  => current.push('\t')
+      'r'  => current.push('\r')
+      '\\' => current.push('\\')
+      '"'  => current.push('"')
+      '\'' => current.push('\'')
+      '0'  => current.push('\u0000')
+      'u'  => {
+        let digits = [];
+        let loc = from.advance(pos);
+        for i in 0..<4 {
+          let c = ch();
+          if (not(c is ('0'..='9' | 'a'..='f' | 'A'..='F'))) {
+            @diag.error(loc, loc.advance(i), "unexpected unicode escape sequence");
+            break;
+          }
+          digits.push(c);
+        }
+        let unicode = parse_hex(digits, loc);
+        current.push(Int::unsafe_to_char(unicode));
+      }
+      '{' => {
+        let s = String::from_array(current);
+        let loc = from.advance(pos);
+        chunks.push(AST::new(Str(s), loc.advance(-current.length()), loc));
+        current.clear();
+
+        let mut depth = 1;
+        let code = [];
+        while (depth > 0) {
+          let c = ch();
+          if (pos >= str.length()) {
+            @diag.error(from, self.loc(), "unterminated f-string literal");
+            break;
+          } else if (c == '{') {
+            depth += 1;
+          } else if (c == '}') {
+            depth -= 1;
+            if depth == 0 {
+              break;
+            }
+          }
+
+          if (depth > 0) {
+            code.push(c);
+          }
+        }
+
+        let code = String::from_array(code);
+        let tokens = Lexer::new(self.filename + "_fstring_\{@utils.count()}", code).lex();
+        let errcnt = @diag.errcnt();
+        let ast = Parser::new(self.pack, self.filename, tokens).expr();
+        if (errcnt != @diag.errcnt()) {
+          @diag.error(from, self.loc(), "cannot parse subexpression in f-string");
+          return AST::new(Str(""), from, self.loc());
+        }
+        chunks.push(ast);
+      }
+      _ => {
+        let loc = from.advance(pos);
+        @diag.error(loc, loc.advance(1), ("unknown escape sequence"));
+      }
+      }
+    }
+    c => current.push(c);
+    }
+  }
+  let s = String::from_array(current);
+  let loc = from.advance(pos);
+  chunks.push(AST::new(Str(s), loc.advance(-current.length()), loc));
+
+  if (chunks.length() == 1) {
+    return chunks[0];
+  }
+  return AST::new(Fstr(chunks), from, self.loc());
+}
+
 pub fn Parser::primary(self: Parser) -> AST {
   let from = self.peek().loc;
   let tok = self.consume();
@@ -275,7 +371,7 @@ pub fn Parser::primary(self: Parser) -> AST {
     Int(vi) => AST::new(Int(vi), from, self.loc());
     Double(vd) => AST::new(Double(vd), from, self.loc());
     Float(vf) => AST::new(Float(vf), from, self.loc());
-    Str(vs) => AST::new(Str(vs), from, self.loc());
+    Str(vs) => self.fstr(vs);
     True => AST::new(Bool(true), from, self.loc());
     False => AST::new(Bool(false), from, self.loc());
     LPar => {
@@ -359,6 +455,19 @@ pub fn Parser::primary(self: Parser) -> AST {
       }
       AST::new(Arr(exprs), from, self.loc());
     }
+    Packname(pack) => {
+      self.expects(Dot);
+      if (not(self.peek().isa(Ident(""))) && not(self.peek().isa(Typename("")))) {
+        @diag.error(from, self.loc(), "package name does not qualify another name");
+        return AST::new(Leaf, from, self.loc());
+      }
+      let n = self.primary();
+      match n {
+        { kind: VarRef(x), .. } => { ..n, kind: VarRef(x.pack(pack)) }
+        { kind: EnumConstr(x, tys), .. } => { ..n, kind: EnumConstr(x.pack(pack), tys) }
+        _ => panic()
+      }
+    }
     _ => {
       @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected token \{tok.ty}");
       self.ignore_until([Semicolon, Let, RBrace, Newline]);
@@ -371,7 +480,7 @@ pub fn Parser::postfix(self: Parser) -> AST {
   let from = self.peek().loc;
   let mut n = self.primary();
   
-  while (self.peek().is_any([LPar, Dot])) {
+  while (self.peek().is_any([LPar, Dot, LBracket])) {
     if (self.check(Dot)) {
       let field = self.expect_ident();
       n = AST::new(FieldRef(n, field), from, self.loc());
@@ -384,9 +493,17 @@ pub fn Parser::postfix(self: Parser) -> AST {
         args.push(self.expr());
         if (not(self.peek().isa(RPar))) {
           self.expect(Comma);
+          self.strip();
         }
       }
       n = AST::new(Call(n, args), from, self.loc())
+      continue;
+    }
+
+    if (self.check(LBracket)) {
+      let ind = self.expr();
+      self.expects(RBracket);
+      n = AST::new(ArrAccess(n, ind), from, self.loc());
       continue;
     }
 
@@ -460,8 +577,18 @@ pub fn Parser::cmp(self: Parser) -> AST {
   return n;
 }
 
-pub fn Parser::expr(self: Parser) -> AST {
+pub fn Parser::tryres(self: Parser) -> AST {
+  let from = self.peek().loc;
+  if (self.checks(Try)) {
+    self.expects(Ques);
+    let after = self.tryres();
+    return AST::new(Unary(Try, after), from, self.loc());
+  }
   return self.cmp();
+}
+
+pub fn Parser::expr(self: Parser) -> AST {
+  return self.tryres();
 }
 
 pub fn Parser::semicolon(self: Parser) -> Unit {
@@ -575,7 +702,7 @@ pub fn Parser::stmt(self: Parser) -> AST {
       let old = self.place;
       // The +=, -= etc. will not be affected by newline.
       self.strip();
-      if (self.peek().is_any([PlusEq, MinusEq, StarEq, SlashEq, PercentEq])) {
+      if (self.peek().is_any([PlusEq, MinusEq, StarEq, SlashEq, PercentEq, Assign])) {
         let tok = self.consume();
         let kind = match tok.ty {
           PlusEq => Add
@@ -583,6 +710,7 @@ pub fn Parser::stmt(self: Parser) -> AST {
           StarEq => Mul
           SlashEq => Div
           PercentEq => Mod
+          Assign => Assign
           _ => panic()
         }
         self.strip();

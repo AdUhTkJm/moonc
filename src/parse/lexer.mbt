@@ -119,7 +119,6 @@ pub fn Lexer::read_str(self: Lexer) -> String {
   let result = [];
   while true {
     let c = self.ch();
-
     match c {
       '\u0000' => {
         @diag.error(loc, loc.advance(1), "unterminated string literal");
@@ -147,34 +146,7 @@ pub fn Lexer::read_str(self: Lexer) -> String {
         }
         break;
       }
-      '\\' => {
-        let next = self.ch();
-        match next {
-          'n'  => result.push('\n')
-          't'  => result.push('\t')
-          'r'  => result.push('\r')
-          '\\' => result.push('\\')
-          '"'  => result.push('"')
-          '\'' => result.push('\'')
-          '0'  => result.push('\u0000')
-          'u'  => {
-            let digits = [];
-            for i in 0..<4 {
-              let c = self.ch();
-              if (not(c is ('0'..='9' | 'a'..='f' | 'A'..='F'))) {
-                @diag.error(loc, loc.advance(i), "unexpected unicode escape sequence");
-                break;
-              }
-              digits.push(c);
-            }
-            let unicode = parse_hex(digits, loc);
-            result.push(Int::unsafe_to_char(unicode));
-          }
-          _ => {
-            @diag.error(loc, loc.advance(1), ("unknown escape sequence"));
-          }
-        }
-      }
+      // Other escape characters are left for parser.
       _ => {
         result.push(c);
       }
@@ -195,6 +167,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
     ']' => Token::new(RBracket, loc, 1)
     ',' => Token::new(Comma, loc, 1)
     ';' => Token::new(Semicolon, loc, 1)
+    '?' => Token::new(Ques, loc, 1)
     
     '+' => {
       if (self.check("=")) {
@@ -261,6 +234,12 @@ pub fn Lexer::next(self: Lexer) -> Token {
       }
       Token::new(Colon, loc, 1)
     }
+    '!' => {
+      if (self.check("=")) {
+        return Token::new(Ne, loc, 2);
+      }
+      Token::new(Bang, loc, 1)
+    }
 
     'a'..='z' | '_' => {
       let name = [c];
@@ -290,6 +269,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
         "false" => Token::new(False, loc, 5)
         "break" => Token::new(Break, loc, 5);
         "continue" => Token::new(Continue, loc, 8);
+        "try" => Token::new(Try, loc, 3)
         "pub" => {
           if (self.check("(all)")) {
             return Token::new(Puball, loc, 8);
@@ -309,6 +289,14 @@ pub fn Lexer::next(self: Lexer) -> Token {
       }
       self.retrace();
       Token::new(Typename(String::from_array(name)), loc, name.length());
+    }
+    '@' => {
+      let name = [c];
+      for c = self.ch(); c is ('a'..='z' | 'A' ..= 'Z' | '_'); c = self.ch() {
+        name.push(c);
+      }
+      self.retrace();
+      Token::new(Packname(String::from_array(name)), loc, name.length());
     }
     '\n' => { self.line += 1; Token::new(Newline, loc.advance(-1), 0) }
     ' ' | '\r' | '\t' => self.next()

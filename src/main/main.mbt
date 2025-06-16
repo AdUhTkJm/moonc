@@ -1,5 +1,5 @@
 fn main {
-  let argv = ["test/loop.mbt"];
+  let argv = ["src/main/main.mbt"];
   let files = [];
   @ArgParser.parse([
     // Specs go here
@@ -27,7 +27,7 @@ fn main {
     return;
   }
 
-  let parser = @parse.Parser::new(None, tokens);
+  let parser = @parse.Parser::new(None, "<stdin>", tokens);
   let ast = parser.parse();
   let good = @diag.report();
   if (not(good)) {
