@@ -409,6 +409,13 @@ pub fn Lexer::next(self: Lexer) -> Token {
       }
     }
     '.' => {
+      if (self.check(".=")) {
+        return Token::new(IncRange, loc, 3);
+      }
+      if (self.check(".<")) {
+        return Token::new(ExcRange, loc, 3);
+      }
+      
       let digits = [c];
       let next = self.peek(0);
       if (next is '0'..='9') {

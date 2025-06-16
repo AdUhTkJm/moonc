@@ -5,9 +5,18 @@ enum X {
   D(Int)
 }
 
+fn print(x: X) -> Unit {
+  println(match x {
+    A => 1
+    B => 2
+    C => 3
+    D(x) => x
+  });
+}
+
 fn main {
-  let _ = A;
-  let _ = D(3);
-  let _ = X::B;
-  let _ = X::D(1 - 2);
+  print(A);
+  print(X::B);
+  print(C);
+  print(X::D(-2));
 }

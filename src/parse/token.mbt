@@ -6,6 +6,7 @@ pub(all) enum TokenType {
   Double(Double)    // Double literal
   Float(Float)      // Float literal
   Str(String)       // "[^"]*"
+  Char(Char)        // '?'
 
   // Keywords
   Let
@@ -66,6 +67,8 @@ pub(all) enum TokenType {
   Arrow             // ->
   Arrrow            // =>
   Dot               // .
+  IncRange          // ..=
+  ExcRange          // ..<
 
   // Special
   EOF
@@ -108,6 +111,8 @@ pub impl Show for TokenType with to_string(self) -> String {
     Arrow => "'->'"
     Arrrow => "'=>'"
     Dot => "'.'"
+    IncRange => "'..='"
+    ExcRange => "'..<'"
     Fn => "fn"
     Let => "let"
     Return => "return"
@@ -138,6 +143,7 @@ pub impl Show for TokenType with to_string(self) -> String {
     Int(x) => "integer literal \{x}"
     Typename(x) => "type name '\{x}'"
     Ident(x) => "identifier '\{x}'"
+    Char(x) => "char '\{x}'"
     Unknown => "unknown"
     Newline => "newline"
   }
@@ -168,6 +174,7 @@ pub fn Token::isa(self: Token, ty: TokenType) -> Bool {
     (Double(_), Double(_)) => true
     (Float(_), Float(_)) => true
     (Str(_), Str(_)) => true
+    (Char(_), Char(_)) => true
     _ => false
   }
 }

@@ -205,6 +205,68 @@ pub fn Parser::ifexpr(self: Parser) -> AST {
   AST::new(If(cond, body, other), from, self.loc());
 }
 
+fn Parser::base_pattern(self: Parser) -> Pattern {
+  let tok = self.consumes();
+  match tok.ty {
+    Int(x) => Int(x)
+    Char(x) => Char(x)
+    Str(x) => Str(x)
+    Typename(x) => Enum(x, [])
+    _ => {
+      @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected match pattern");
+      Unknown
+    }
+  }
+}
+
+pub fn Parser::pattern(self: Parser) -> Pattern {
+  let from = self.peek().loc;
+  let pattern = self.base_pattern();
+  if (self.check(LPar)) {
+    if (pattern is Enum(x, [])) {
+      let bindings = [];
+      while (not(self.check(RPar)) && not(self.peek().isa(EOF))) {
+        bindings.push(self.expect_ident());
+        if (not(self.peek().isa(RPar))) {
+          self.expect(Comma);
+        }
+      }
+      return Enum(x, bindings);
+    } else {
+      @diag.error(from, self.loc(), "binding a variant that does not accept argument");
+      return pattern;
+    }
+  }
+
+  if (self.check(IncRange)) {
+    let qattern = self.base_pattern();
+    return IncRange(pattern, qattern);
+  }
+
+  if (self.check(ExcRange)) {
+    let qattern = self.base_pattern();
+    return ExcRange(pattern, qattern);
+  }
+
+  pattern
+}
+
+pub fn Parser::matchexpr(self: Parser) -> AST {
+  let from = self.peek().loc;
+  let matcher = self.expr();
+  let branches = [];
+  self.expects(LBrace);
+  while (not(self.checks(RBrace)) && not(self.peek().isa(EOF))) {
+    let pattern = self.pattern();
+    self.expects(Arrrow);
+    let expr = self.expr();
+    self.semicolon();
+    branches.push((pattern, expr));
+  }
+
+  AST::new(Match(matcher, branches), from, self.loc());
+}
+
 pub fn Parser::primary(self: Parser) -> AST {
   let from = self.peek().loc;
   let tok = self.consume();
@@ -243,6 +305,7 @@ pub fn Parser::primary(self: Parser) -> AST {
       self.place = old - 1;
       self.block();
     }
+    Match => self.matchexpr();
     If => self.ifexpr();
     Fn => self.fndecl(Priv);
     Typename(ty) => {
@@ -331,9 +394,22 @@ pub fn Parser::postfix(self: Parser) -> AST {
   return n;
 }
 
+pub fn Parser::prefix(self: Parser) -> AST {
+  let from = self.peek().loc;
+  if (self.check(Minus)) {
+    let n = self.prefix();
+    return AST::new(Unary(Minus, n), from, self.loc());
+  }
+  if (self.check(Bang)) {
+    let n = self.prefix();
+    return AST::new(Unary(Not, n), from, self.loc());
+  }
+  return self.postfix();
+}
+
 pub fn Parser::mul(self: Parser) -> AST {
   let from = self.peek().loc;
-  let mut n = self.postfix();
+  let mut n = self.prefix();
   while (self.peek().is_any([Star, Slash, Percent])) {
     let kind = match (self.consume().ty) {
       Star => Mul

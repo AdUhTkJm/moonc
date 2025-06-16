@@ -28,6 +28,16 @@ pub(all) struct Name {
   name: String
 }
 
+pub(all) enum Pattern {
+  IncRange(Pattern, Pattern)
+  ExcRange(Pattern, Pattern)
+  Char(Char)
+  Int(Int)
+  Str(String)
+  Enum(String, Array[String])
+  Unknown
+}
+
 pub fn Name::unqualified(pack: Option[String], x: String) -> Name {
   { pack: pack, namespace: None, name: x }
 }
@@ -47,6 +57,7 @@ pub(all) enum ASTType {
   If(AST, AST, Option[AST])
   Binary(BinaryKind, AST, AST)
   BinaryInplace(BinaryKind, AST, AST)
+  Unary(UnaryKind, AST)
   Block(Array[AST])
   VarRef(Name)
   FieldRef(AST, String)
@@ -62,6 +73,10 @@ pub(all) enum ASTType {
   Break(Option[AST])
   While(AST, AST, Option[AST])
   For(AST, AST, AST, AST, Option[AST])
+  ForIn(String, AST, AST, Option[AST])
+  Match(AST, Array[(Pattern, AST)])
+  IncRange(AST, AST)
+  ExcRange(AST, AST)
   Leaf
 }
 
@@ -136,6 +151,26 @@ pub impl Show for Visible with output(self, writer) -> Unit {
   writer.write_string(self.to_string());
 }
 
+pub impl Show for Pattern with to_string(self) -> String {
+  match self {
+    Int(x) => "\{x}"
+    Str(x) => x
+    Char(x) => "'\{x}'"
+    IncRange(x, y) => "\{x}..=\{y}"
+    ExcRange(x, y) => "\{x}..<\{y}"
+    Unknown => "?"
+    Enum(x, arr) => {
+      let params = arr.join(", ");
+      let params = if (params.length() == 0) { "" } else { "(\{params})" }
+      "\{x}\{params}"
+    }
+  }
+}
+
+pub impl Show for Pattern with output(self, writer) -> Unit {
+  writer.write_string(self.to_string());
+}
+
 pub impl Show for Name with to_string(self) -> String {
   let builder = StringBuilder::new();
   if (self.pack is Some(pack)) {
@@ -152,15 +187,15 @@ pub impl Show for Name with output(self, writer) -> Unit {
   writer.write_string(self.to_string());
 }
 
-fn dep_str(ast: ASTType, depth: Int) -> String {
-  match ast {
+fn dep_str(ast: AST, depth: Int) -> String {
+  match ast.kind {
     Int(vi) => "\{vi}"
     Double(vd) => "\{vd}"
     Float(vf) => "\{vf}F"
     Str(vs) => "R\"(\{vs})\""
     VarRef(name) => "\{name}"
     Arr(arr) => {
-      let s = arr.map(fn (x) { dep_str(x.kind, depth) }).join(", ");
+      let s = arr.map(fn (x) { dep_str(x, depth) }).join(", ");
       "[\{s}]"
     }
     Block(arr) => {
@@ -168,16 +203,17 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
       let indent = String::make(@math.maximum(2 * (depth - 1), 0), ' ');
       builder.write_string("{\n");
       for x in arr {
-        builder.write_string("  \{indent}\{dep_str(x.kind, depth + 1)};\n");
+        builder.write_string("  \{indent}\{dep_str(x, depth + 1)};\n");
       }
       builder.write_string("\{indent}}");
       builder.to_string();
     }
-    Binary(kind, l, r) => "(\{dep_str(l.kind, depth)} \{kind} \{dep_str(r.kind, depth)})"
-    BinaryInplace(kind, l, r) => "\{dep_str(l.kind, depth)} \{kind}= \{dep_str(r.kind, depth)}"
+    Binary(kind, l, r) => "(\{dep_str(l, depth)} \{kind} \{dep_str(r, depth)})"
+    BinaryInplace(kind, l, r) => "\{dep_str(l, depth)} \{kind}= \{dep_str(r, depth)}"
+    Unary(kind, l) => "(\{kind} \{dep_str(l, depth)})"
     VarDecl(name, mutable, init) => {
       let mutable = @utils.ite(mutable, "mut ", "");
-      "let \{mutable}\{name} = \{dep_str(init.kind, depth)}"
+      "let \{mutable}\{name} = \{dep_str(init, depth)}"
     }
     ParamDecl(name) => name
     FnDecl(visible, name, params, body) => {
@@ -186,7 +222,7 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
       let params = @utils.ite(["main", "test", "init"].contains(name.name), params, "(\{params})");
       let visible = @utils.ite(visible == Priv, "", "\{visible} ")
       builder.write_string("\{visible}fn \{name}\{params} ");
-      builder.write_string(dep_str(body.kind, depth));
+      builder.write_string(dep_str(body, depth));
       builder.to_string();
     }
     StructDecl(visible, name, fields) => {
@@ -205,7 +241,8 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
       let fields = variants.map(fn (t) {
         let (x, y) = t;
         let s = y.map(Type::to_string).join(", ");
-        "\{x}(\{s})"
+        let s = if (s.length() == 0) { "" } else { "(\{s})" }
+        "\{x}\{s}"
       }).join("\n  \{indent}");
       
       let visible = @utils.ite(visible == Priv, "", "\{visible} ")
@@ -217,47 +254,62 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
     StructInit(map) => {
       let fields = map.to_array().map(fn (t) {
         let (x, y) = t;
-        "\{x}: \{dep_str(y.kind, depth)}"
+        "\{x}: \{dep_str(y, depth)}"
       }).join(", ");
       "{ \{fields} }";
     }
     If(cond, l, r) => {
       let builder = StringBuilder::new();
       builder.write_string("if \{cond} ");
-      builder.write_string(dep_str(l.kind, depth));
-      builder.write_string(r.map_or("", fn(x) { dep_str(x.kind, depth) }));
+      builder.write_string(dep_str(l, depth));
+      builder.write_string(r.map_or("", fn(x) { dep_str(x, depth) }));
       builder.to_string();
     }
     Return(ast) => {
       match ast {
         None => "return";
-        Some(ast) => "return \{dep_str(ast.kind, depth)}"
+        Some(ast) => "return \{dep_str(ast, depth)}"
       }
     }
     Call(call, args) => {
-      let args = args.map(fn (x) { dep_str(x.kind, depth) }).join(", ");
-      "\{dep_str(call.kind, depth)}(\{args})";
+      let args = args.map(fn (x) { dep_str(x, depth) }).join(", ");
+      "\{dep_str(call, depth)}(\{args})";
     }
     ThisCall(this, name, args) => {
-      let args = args.map(fn (x) { dep_str(x.kind, depth) }).join(", ");
-      "\{dep_str(this.kind, depth)}.\{name}(\{args})";
+      let args = args.map(fn (x) { dep_str(x, depth) }).join(", ");
+      "\{dep_str(this, depth)}.\{name}(\{args})";
     }
     EnumConstr(name, args) => {
-      let args = args.map(fn (x) { dep_str(x.kind, depth) }).join(", ");
-      "\{name}(\{args})";
+      let args = args.map(fn (x) { dep_str(x, depth) }).join(", ");
+      let args = if (args.length() == 0) { "" } else { "(\{args})" }
+      "\{name}\{args}";
     }
-    FieldRef(x, name) => "\{dep_str(x.kind, depth)}.\{name}"
+    FieldRef(x, name) => "\{dep_str(x, depth)}.\{name}"
     Break(val) => {
-      let v = val.map_or("", fn (x) { dep_str(x.kind, depth) });
+      let v = val.map_or("", fn (x) { dep_str(x, depth) });
       "break \{v}";
     }
     While(cond, body, exit) => {
-      let v = exit.map_or("", fn (x) { "else \{dep_str(x.kind, depth)}" });
-      "while \{dep_str(cond.kind, depth)} \{dep_str(body.kind, depth)} \{v}";
+      let v = exit.map_or("", fn (x) { "else \{dep_str(x, depth)}" });
+      "while \{dep_str(cond, depth)} \{dep_str(body, depth)} \{v}";
     }
     For(start, stop, step, body, exit) => {
-      let v = exit.map_or("", fn (x) { "else \{dep_str(x.kind, depth)}" });
-      "for \{dep_str(start.kind, depth)}; \{dep_str(stop.kind, depth)}; \{dep_str(step.kind, depth)} \{dep_str(body.kind, depth)} \{v}"
+      let v = exit.map_or("", fn (x) { "else \{dep_str(x, depth)}" });
+      "for \{dep_str(start, depth)}; \{dep_str(stop, depth)}; \{dep_str(step, depth)} \{dep_str(body, depth)} \{v}"
+    }
+    ForIn(name, range, body, exit) => {
+      let v = exit.map_or("", fn (x) { "else \{dep_str(x, depth)}" });
+      "for \{name} in \{dep_str(range, depth)}; \{dep_str(body, depth)} \{dep_str(body, depth)} \{v}"
+    }
+    IncRange(begin, end) => "\{dep_str(begin, depth)}..=\{dep_str(end, depth)}"
+    ExcRange(begin, end) => "\{dep_str(begin, depth)}..<\{dep_str(end, depth)}"
+    Match(matcher, arr) => {
+      let indent = String::make(@math.maximum(2 * (depth - 1), 0), ' ');
+      let s = arr.map(fn (t) {
+        let (pat, body) = t;
+        "  \{indent}\{pat} => \{dep_str(body, depth + 1)}"
+      }).join("\n");
+      "match \{dep_str(matcher, depth)} {\n\{s}\n\{indent}}"
     }
     Continue => "continue"
     Leaf => "<leaf>"
@@ -265,7 +317,7 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
 }
 
 pub impl Show for ASTType with to_string(self) -> String {
-  dep_str(self, 1);
+  dep_str({ kind: self, from: @diag.Loc::unknown(), to: @diag.Loc::unknown(), ty: Unknown }, 1);
 }
 
 pub impl Show for ASTType with output(self, writer) -> Unit {
@@ -288,6 +340,7 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     If(cond, l, r) => If(cond.map(f), l.map(f), r.map(f))
     Binary(kind, l, r) => Binary(kind, l.map(f), r.map(f))
     BinaryInplace(kind, l, r) => BinaryInplace(kind, l.map(f), r.map(f))
+    Unary(kind, l) => Unary(kind, l.map(f))
     Block(body) => Block(body.map(f))
     Return(x) => Return(x.map(f))
     Call(x, args) => Call(x.map(f), args.map(f));
@@ -298,7 +351,11 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     Break(val) => Break(val.map(f))
     While(cond, body, exit) => While(cond.map(f), body.map(f), exit.map(f))
     For(start, stop, step, body, exit) => For(start.map(f), stop.map(f), step.map(f), body.map(f), exit.map(f))
+    ForIn(indvar, range, body, exit) => ForIn(indvar, range.map(f), body.map(f), exit.map(f));
     EnumConstr(name, arr) => EnumConstr(name, arr.map(f))
+    IncRange(x, y) => IncRange(x.map(f), y.map(f))
+    ExcRange(x, y) => ExcRange(x.map(f), y.map(f))
+    Match(matcher, arr) => Match(matcher.map(f), arr.map(fn (t) { (t.0, t.1.map(f)) }))
     Int(_) | VarRef(_) | ParamDecl(_) | Leaf |
     StructDecl(_) | Double(_) | Float(_) | Str(_) |
     Continue | EnumDecl(_) => self.kind
