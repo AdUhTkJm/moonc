@@ -286,6 +286,10 @@ pub fn Lexer::next(self: Lexer) -> Token {
         "match" => Token::new(Match, loc, 5)
         "extern" => Token::new(Extern, loc, 6)
         "type" => Token::new(Type, loc, 4)
+        "true" => Token::new(True, loc, 4)
+        "false" => Token::new(False, loc, 5)
+        "break" => Token::new(Break, loc, 5);
+        "continue" => Token::new(Continue, loc, 8);
         "pub" => {
           if (self.check("(all)")) {
             return Token::new(Puball, loc, 8);

@@ -38,10 +38,12 @@ pub fn Name::qualified(pack: Option[String], namespace: String, x: String) -> Na
 
 pub(all) enum ASTType {
   FnDecl(Visible, Name, Array[String], AST)
-  StructDecl(Visible, String, Array[(String, Type)])
+  StructDecl(Visible, Name, Array[(String, Type)])
   StructInit(Map[String, AST])
   ParamDecl(String)
   VarDecl(String, Bool, AST)
+  EnumDecl(Visible, Name, Array[(String, Array[Type])])
+  EnumConstr(Name, Array[AST])
   If(AST, AST, Option[AST])
   Binary(BinaryKind, AST, AST)
   BinaryInplace(BinaryKind, AST, AST)
@@ -55,6 +57,11 @@ pub(all) enum ASTType {
   Double(Double)
   Float(Float)
   Str(String)
+  Arr(Array[AST])
+  Continue
+  Break(Option[AST])
+  While(AST, AST, Option[AST])
+  For(AST, AST, AST, AST, Option[AST])
   Leaf
 }
 
@@ -152,6 +159,10 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
     Float(vf) => "\{vf}F"
     Str(vs) => "R\"(\{vs})\""
     VarRef(name) => "\{name}"
+    Arr(arr) => {
+      let s = arr.map(fn (x) { dep_str(x.kind, depth) }).join(", ");
+      "[\{s}]"
+    }
     Block(arr) => {
       let builder = StringBuilder::new();
       let indent = String::make(@math.maximum(2 * (depth - 1), 0), ' ');
@@ -188,6 +199,21 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
       builder.write_string("\n\{indent}}");
       builder.to_string();
     }
+    EnumDecl(visible, name, variants) => {
+      let builder = StringBuilder::new();
+      let indent = String::make(@math.maximum(2 * depth - 2, 0), ' ');
+      let fields = variants.map(fn (t) {
+        let (x, y) = t;
+        let s = y.map(Type::to_string).join(", ");
+        "\{x}(\{s})"
+      }).join("\n  \{indent}");
+      
+      let visible = @utils.ite(visible == Priv, "", "\{visible} ")
+      builder.write_string("\{visible}struct \{name} {\n  \{indent}");
+      builder.write_string(fields);
+      builder.write_string("\n\{indent}}");
+      builder.to_string();
+    }
     StructInit(map) => {
       let fields = map.to_array().map(fn (t) {
         let (x, y) = t;
@@ -216,7 +242,24 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
       let args = args.map(fn (x) { dep_str(x.kind, depth) }).join(", ");
       "\{dep_str(this.kind, depth)}.\{name}(\{args})";
     }
+    EnumConstr(name, args) => {
+      let args = args.map(fn (x) { dep_str(x.kind, depth) }).join(", ");
+      "\{name}(\{args})";
+    }
     FieldRef(x, name) => "\{dep_str(x.kind, depth)}.\{name}"
+    Break(val) => {
+      let v = val.map_or("", fn (x) { dep_str(x.kind, depth) });
+      "break \{v}";
+    }
+    While(cond, body, exit) => {
+      let v = exit.map_or("", fn (x) { "else \{dep_str(x.kind, depth)}" });
+      "while \{dep_str(cond.kind, depth)} \{dep_str(body.kind, depth)} \{v}";
+    }
+    For(start, stop, step, body, exit) => {
+      let v = exit.map_or("", fn (x) { "else \{dep_str(x.kind, depth)}" });
+      "for \{dep_str(start.kind, depth)}; \{dep_str(stop.kind, depth)}; \{dep_str(step.kind, depth)} \{dep_str(body.kind, depth)} \{v}"
+    }
+    Continue => "continue"
     Leaf => "<leaf>"
   }
 }
@@ -238,22 +281,27 @@ pub impl Show for AST with output(self, writer) -> Unit {
 }
 
 pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
-  let mapper = fn (x: AST) { x.map(f) };
   f({ kind:
   match self.kind {
     FnDecl(visible, name, params, body) => FnDecl(visible, name, params, body.map(f))
     VarDecl(name, mutable, init) => VarDecl(name, mutable, init.map(f))
-    If(cond, l, r) => If(cond.map(f), l.map(f), r.map(mapper))
+    If(cond, l, r) => If(cond.map(f), l.map(f), r.map(f))
     Binary(kind, l, r) => Binary(kind, l.map(f), r.map(f))
     BinaryInplace(kind, l, r) => BinaryInplace(kind, l.map(f), r.map(f))
-    Block(body) => Block(body.map(mapper))
-    Return(x) => Return(x.map(mapper))
-    Call(x, args) => Call(x.map(f), args.map(mapper));
-    ThisCall(x, name, args) => ThisCall(x.map(f), name, args.map(mapper));
+    Block(body) => Block(body.map(f))
+    Return(x) => Return(x.map(f))
+    Call(x, args) => Call(x.map(f), args.map(f));
+    ThisCall(x, name, args) => ThisCall(x.map(f), name, args.map(f));
     FieldRef(x, name) => FieldRef(x.map(f), name)
     StructInit(map) => StructInit(Map::from_array(map.to_array().map(fn (t) { (t.0, t.1.map(f)) })))
+    Arr(arr) => Arr(arr.map(f))
+    Break(val) => Break(val.map(f))
+    While(cond, body, exit) => While(cond.map(f), body.map(f), exit.map(f))
+    For(start, stop, step, body, exit) => For(start.map(f), stop.map(f), step.map(f), body.map(f), exit.map(f))
+    EnumConstr(name, arr) => EnumConstr(name, arr.map(f))
     Int(_) | VarRef(_) | ParamDecl(_) | Leaf |
-    StructDecl(_) | Double(_) | Float(_) | Str(_) => self.kind
+    StructDecl(_) | Double(_) | Float(_) | Str(_) |
+    Continue | EnumDecl(_) => self.kind
   },
     from: self.from,
     to: self.to,

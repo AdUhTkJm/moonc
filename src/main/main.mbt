@@ -1,5 +1,5 @@
 fn main {
-  let argv = ["test/str.mbt"];
+  let argv = ["test/enum.mbt"];
   let files = [];
   @ArgParser.parse([
     // Specs go here

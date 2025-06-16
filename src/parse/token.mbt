@@ -28,6 +28,10 @@ pub(all) enum TokenType {
   Match
   Extern
   Type
+  Break
+  Continue
+  True
+  False
 
   // Operators
   LBrace            // {
@@ -124,6 +128,10 @@ pub impl Show for TokenType with to_string(self) -> String {
     With => "with"
     Extern => "extern"
     Type => "type"
+    Break => "break"
+    Continue => "continue"
+    True => "true"
+    False => "false"
     Str(x) => "string literal \"\{x}\""
     Double(x) => "double literal \{x}"
     Float(x) => "float literal \{x}"

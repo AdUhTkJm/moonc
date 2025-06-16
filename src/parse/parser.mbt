@@ -58,6 +58,33 @@ pub fn Parser::expect(self: Parser, ty: TokenType) -> Unit {
   }
 }
 
+pub fn Parser::consumes(self: Parser) -> Token {
+  if self.place >= self.data.length() {
+    return Token::new(EOF, self.eof_loc(), 0);
+  }
+
+  let t = self.data[self.place];
+  self.place += 1;
+  self.strip();
+  return t;
+}
+
+pub fn Parser::checks(self: Parser, ty: TokenType) -> Bool {
+  let old = self.place;
+  if (not(self.consumes().isa(ty))) {
+    self.place = old;
+    return false;
+  }
+  return true;
+}
+
+pub fn Parser::expects(self: Parser, ty: TokenType) -> Unit {
+  let tok = self.consumes();
+  if (not(tok.isa(ty))) {
+    @diag.error(tok.loc, tok.loc.advance(tok.len), "expected \{ty}, but got \{tok.ty}");
+  }
+}
+
 pub fn Parser::expect_ident(self: Parser) -> String {
   match self.consume() {
     { ty: Ident(x), .. } => x
@@ -194,23 +221,21 @@ pub fn Parser::primary(self: Parser) -> AST {
     }
     LBrace => {
       let old = self.place;
-      self.strip();
-      if (self.check(Ident(""))) {
-        self.strip();
+      if (self.checks(Ident(""))) {
         // A struct initializer.
-        if (self.check(Colon)) {
+        if (self.checks(Colon)) {
           self.place = old;
-          self.strip();
           let map = Map::new();
-          while (not(self.check(RBrace)) && not(self.peek().isa(EOF))) {
+          while (not(self.checks(RBrace)) && not(self.peek().isa(EOF))) {
             let ident = self.expect_ident();
-            self.expect(Colon);
+            self.expects(Colon);
             let init = self.expr();
             map[ident] = init;
-            if (not(self.peek().isa(RBrace))) {
-              self.expect(Comma);
-            }
             self.strip();
+
+            if (not(self.peek().isa(RBrace))) {
+              self.expects(Comma);
+            }
           }
           return AST::new(StructInit(map), from, self.loc());
         }
@@ -221,10 +246,53 @@ pub fn Parser::primary(self: Parser) -> AST {
     If => self.ifexpr();
     Fn => self.fndecl(Priv);
     Typename(ty) => {
-      // Ty::field
-      self.expect(ColonColon);
-      let name = self.expect_ident();
-      AST::new(VarRef(self.qualified(ty, name)), from, self.loc());
+      if (self.check(ColonColon)) {
+        // Ty::A(...)
+        if (self.peek().isa(Typename(""))) {
+          let name = self.expect_typename();
+          let exprs = [];
+          if (self.check(LPar)) {
+            while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
+              exprs.push(self.expr());
+              self.strip();
+
+              if (not(self.peek().isa(RPar))) {
+                self.expects(Comma);
+              }
+            }
+          }
+          return AST::new(EnumConstr(self.qualified(ty, name), exprs), from, self.loc());
+        }
+        // Ty::field
+        let name = self.expect_ident();
+        return AST::new(VarRef(self.qualified(ty, name)), from, self.loc());
+      }
+      // Ty(...)
+      let exprs = [];
+      if (self.check(LPar)) {
+        while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
+          exprs.push(self.expr());
+          self.strip();
+
+          if (not(self.peek().isa(RPar))) {
+            self.expects(Comma);
+          }
+        }
+      }
+
+      return AST::new(EnumConstr(self.unqualified(ty), exprs), from, self.loc());
+    }
+    LBracket => {
+      let exprs = [];
+      while (not(self.checks(RBracket)) && not(self.peek().isa(EOF))) {
+        exprs.push(self.expr());
+        self.strip();
+
+        if (not(self.peek().isa(RBracket))) {
+          self.expects(Comma);
+        }
+      }
+      AST::new(Arr(exprs), from, self.loc());
     }
     _ => {
       @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected token \{tok.ty}");
@@ -394,7 +462,7 @@ pub fn Parser::block(self: Parser) -> AST {
   self.expect(LBrace);
   let content = [];
   self.strip();
-  while (not(self.check(RBrace))) {
+  while (not(self.check(RBrace)) && not(self.check(EOF))) {
     content.push(self.stmt());
     self.strip();
     if (self.check(EOF)) {
@@ -464,17 +532,49 @@ pub fn Parser::structdecl(self: Parser, visible: Visible) -> AST {
   let fields = [];
   self.expect(LBrace);
   self.strip();
-  while (not(self.check(RBrace))) {
+  while (not(self.check(RBrace)) && not(self.peek().isa(EOF))) {
     let name = self.expect_ident();
     self.expect(Colon);
     let ty = self.typename();
     fields.push((name, ty));
     if (not(self.peek().isa(RBrace))) {
-      self.expect(Newline);
+      self.semicolon();
     }
     self.strip();
   }
-  return AST::new(StructDecl(visible, name, fields), from, self.loc());
+  return AST::new(StructDecl(visible, self.unqualified(name), fields), from, self.loc());
+}
+
+pub fn Parser::enumdecl(self: Parser, visible: Visible) -> AST {
+  self.strip();
+  let from = self.peek().loc;
+  let name = self.expect_typename();
+  let variants = [];
+  self.expect(LBrace);
+  self.strip();
+  while (not(self.check(RBrace)) && not(self.peek().isa(EOF))) {
+    let name = self.expect_typename();
+    let tys = [];
+    // No newline allowed.
+    if (self.check(LPar)) {
+      while (not(self.check(RPar)) && not(self.peek().isa(EOF))) {
+        let ty = self.typename();
+        tys.push(ty);
+        if (not(self.peek().isa(RPar))) {
+          self.expect(Comma);
+        }
+      }
+      if (tys.length() == 0) {
+        @diag.error(from, self.loc(), "empty enum variant when '()' is present");
+      }
+    }
+    variants.push((name, tys));
+    if (not(self.peek().isa(RBrace))) {
+      self.semicolon();
+    }
+    self.strip();
+  }
+  return AST::new(EnumDecl(visible, self.unqualified(name), variants), from, self.loc());
 }
 
 pub fn Parser::toplevel(self: Parser, visible: Visible) -> AST {
@@ -482,6 +582,7 @@ pub fn Parser::toplevel(self: Parser, visible: Visible) -> AST {
   match (tok.ty) {
     Fn => self.fndecl(visible);
     Struct => self.structdecl(visible);
+    Enum => self.enumdecl(visible);
     EOF => AST::new(Leaf, @diag.Loc::unknown(), @diag.Loc::unknown());
     Newline => self.toplevel(visible);
     Pub | Pubopen | Puball | Priv => {
@@ -491,8 +592,10 @@ pub fn Parser::toplevel(self: Parser, visible: Visible) -> AST {
     }
     _ => {
       @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected top-level token \{tok.ty}");
-      self.ignore_until([Fn, Struct]);
-      self.retrace();
+      self.ignore_until([Fn, Struct, Enum]);
+      if (not(self.peek().isa(EOF))) {
+        self.retrace();
+      }
       return self.toplevel(visible);
     }
   }
