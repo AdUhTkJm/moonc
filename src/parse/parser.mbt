@@ -97,6 +97,22 @@ pub fn Parser::ignore_until(self: Parser, stop: Array[TokenType]) -> Unit {
 }
 
 pub fn Parser::typename(self: Parser) -> Type {
+  self.strip();
+  if (self.check(LPar)) {
+    let args = [];
+    while (not(self.check(RPar)) && not(self.peek().isa(EOF))) {
+      let ty = self.typename();
+      args.push(ty);
+      if (not(self.peek().isa(RPar))) {
+        self.expect(Comma);
+      }
+    }
+    if (not(self.check(Arrow))) {
+      return Tuple(args);
+    }
+    let ret = self.typename();
+    return Function(args, ret);
+  }
   let ty = self.expect_typename();
   match (ty) {
     "Int" => Int
@@ -142,6 +158,7 @@ pub fn Parser::primary(self: Parser) -> AST {
       self.block();
     }
     If => self.ifexpr();
+    Fn => self.fndecl(Priv);
     _ => {
       @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected token \{tok.ty}");
       self.ignore_until([Semicolon, Let, RBrace, Newline]);
@@ -159,7 +176,7 @@ pub fn Parser::call(self: Parser) -> AST {
   }
 
   let args = [];
-  while (not(self.check(RPar))) {
+  while (not(self.check(RPar)) && not(self.peek().isa(EOF))) {
     args.push(self.expr());
     if (not(self.peek().isa(RPar))) {
       self.expect(Comma);
@@ -235,16 +252,22 @@ pub fn Parser::stmt(self: Parser) -> AST {
   let from = self.peek().loc;
   match (self.consume().ty) {
     Let => {
+      self.strip();
+      let mutable = self.check(Mut);
+      self.strip();
       let name = self.expect_ident();
       let mut ty = None;
       // Check (: Ty)
+      self.strip();
       if (self.check(Colon)) {
         ty = Some(self.typename());
       }
+      self.strip();
       self.expect(Assign);
+      self.strip();
       let init = self.expr();
       self.semicolon();
-      let ast = AST::new(VarDecl(name, init), from, self.loc());
+      let ast = AST::new(VarDecl(name, mutable, init), from, self.loc());
       if (ty is Some(x)) {
         ast.ty = x;
       }
@@ -260,7 +283,27 @@ pub fn Parser::stmt(self: Parser) -> AST {
     }
     _ => {
       self.retrace();
-      let expr = self.expr();
+      let from = self.peek().loc;
+      let mut expr = self.expr();
+      let old = self.place;
+      // The +=, -= etc. will not be affected by newline.
+      self.strip();
+      if (self.peek().is_any([PlusEq, MinusEq, StarEq, SlashEq, PercentEq])) {
+        let tok = self.consume();
+        let kind = match tok.ty {
+          PlusEq => Add
+          MinusEq => Sub
+          StarEq => Mul
+          SlashEq => Div
+          PercentEq => Mod
+          _ => panic()
+        }
+        self.strip();
+        let rhs = self.expr();
+        expr = AST::new(BinaryInplace(kind, expr, rhs), from, self.loc());
+      } else {
+        self.place = old;
+      }
       self.semicolon();
       return expr;
     }
@@ -287,11 +330,15 @@ pub fn Parser::block(self: Parser) -> AST {
 pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
   self.strip();
   let from = self.peek().loc;
-  let name = self.expect_ident();
+  let hasname = self.peek().isa(Ident(""));
+  // Cannot ite here when operands have side-effects.
+  let name = if (hasname) { self.expect_ident() } else { "__lambda_\{@utils.count()}" };
   let args = [];
+  self.strip();
   if (not(["main", "init", "test"].contains(name))) {
     self.expect(LPar);
-    while (not(self.check(RPar))) {
+    self.strip();
+    while (not(self.check(RPar)) && not(self.peek().isa(EOF))) {
       let argfrom = self.peek().loc;
       let argname = self.expect_ident();
       let mut ty = None;
@@ -307,10 +354,12 @@ pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
       if (not(self.peek().isa(RPar))) {
         self.expect(Comma);
       }
+      self.strip();
     }
   }
   // Check the optional return type.
   let mut retTy = None;
+  self.strip();
   if (self.check(Arrow)) {
     retTy = Some(self.typename());
   }

@@ -19,6 +19,7 @@ pub(all) enum TokenType {
   Priv
   While
   For
+  Mut
 
   // Operators
   LBrace            // {
@@ -33,6 +34,11 @@ pub(all) enum TokenType {
   Star              // *
   Slash             // /
   Percent           // %
+  PlusEq            // +=
+  MinusEq           // -=
+  StarEq            // *=
+  SlashEq           // /=
+  PercentEq         // %=
   Ques              // ?
   Bang              // !
   Comma             // ,
@@ -63,11 +69,16 @@ pub impl Show for TokenType with to_string(self) -> String {
     Comma => "','"
     Bang => "'!'"
     Ques => "'?'"
-    Slash => "'/'"
-    Star => "'*'"
-    Percent => "'%'"
-    Minus => "'-'"
     Plus => "'+'"
+    Minus => "'-'"
+    Star => "'*'"
+    Slash => "'/'"
+    Percent => "'%'"
+    PlusEq => "'+='"
+    MinusEq => "'-='"
+    StarEq => "'*='"
+    SlashEq => "'/='"
+    PercentEq => "'%='"
     LPar => "'('"
     RPar => "')'"
     LBracket => "'['"
@@ -97,6 +108,7 @@ pub impl Show for TokenType with to_string(self) -> String {
     Priv => "priv"
     While => "while"
     For => "for"
+    Mut => "mut"
     Str(_) => "string literal"
     FP(_) => "floating-point literal"
     Int(_) => "integer literal"

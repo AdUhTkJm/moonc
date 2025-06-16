@@ -26,9 +26,10 @@ pub(all) enum ASTType {
   FnDecl(Visible, String, Array[AST], AST)
   StructDecl(Visible, String, Array[(String, Type)])
   ParamDecl(String)
-  VarDecl(String, AST)
+  VarDecl(String, Bool, AST)
   If(AST, AST, Option[AST])
   Binary(BinaryKind, AST, AST)
+  BinaryInplace(BinaryKind, AST, AST)
   Block(Array[AST])
   VarRef(String)
   Return(Option[AST])
@@ -39,8 +40,9 @@ pub(all) enum ASTType {
 
 pub(all) enum Type {
   Named(String, Array[Type])
-  TypeParam(String, Array[Type])
   FixedArray(Type)
+  Function(Array[Type], Type)
+  Tuple(Array[Type])
   Int
   Float
   Unknown
@@ -119,7 +121,11 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
       builder.to_string();
     }
     Binary(kind, l, r) => "(\{dep_str(l.kind, depth)} \{kind} \{dep_str(r.kind, depth)})"
-    VarDecl(name, init) => "let \{name} = \{dep_str(init.kind, depth)}"
+    BinaryInplace(kind, l, r) => "\{dep_str(l.kind, depth)} \{kind}= \{dep_str(r.kind, depth)}"
+    VarDecl(name, mutable, init) => {
+      let mutable = @utils.ite(mutable, "mut ", "");
+      "let \{mutable}\{name} = \{dep_str(init.kind, depth)}"
+    }
     ParamDecl(name) => name
     FnDecl(visible, name, params, body) => {
       let builder = StringBuilder::new();
@@ -127,7 +133,7 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
       let params = @utils.ite(["main", "test", "init"].contains(name), params, "(\{params})");
       let visible = @utils.ite(visible == Priv, "", "\{visible} ")
       builder.write_string("\{visible}fn \{name}\{params} ");
-      builder.write_string(dep_str(body.kind, depth + 1));
+      builder.write_string(dep_str(body.kind, depth));
       builder.to_string();
     }
     StructDecl(visible, name, fields) => {
@@ -162,7 +168,7 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
 }
 
 pub impl Show for ASTType with to_string(self) -> String {
-  dep_str(self, 0);
+  dep_str(self, 1);
 }
 
 pub impl Show for ASTType with output(self, writer) -> Unit {
@@ -180,9 +186,10 @@ pub impl Show for AST with output(self, writer) -> Unit {
 pub fn ASTType::map(self: ASTType, f: (ASTType) -> ASTType) -> ASTType {
   match self {
     FnDecl(visible, name, params, body) => f(FnDecl(visible, name, params.map(fn (x) { x.map(f) }), body.map(f)))
-    VarDecl(name, init) => f(VarDecl(name, init.map(f)))
+    VarDecl(name, mutable, init) => f(VarDecl(name, mutable, init.map(f)))
     If(cond, l, r) => f(If(cond.map(f), l.map(f), r.map(fn (x) { x.map(f) })))
     Binary(kind, l, r) => f(Binary(kind, l.map(f), r.map(f)))
+    BinaryInplace(kind, l, r) => f(BinaryInplace(kind, l.map(f), r.map(f)))
     Block(body) => f(Block(body.map(fn (x) { x.map(f) })))
     Return(x) => f(Return(x.map(fn (x) { x.map(f) })))
     Call(x, args) => f(Call(x.map(f), args.map(fn (x) { x.map(f) })));

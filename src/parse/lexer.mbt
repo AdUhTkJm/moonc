@@ -63,8 +63,6 @@ pub fn Lexer::next(self: Lexer) -> Token {
   let loc = @diag.Loc::new(self.filename, self.loc);
   let c = self.ch();
   match c {
-    '+' => Token::new(Plus, loc, 1) 
-    '*' => Token::new(Star, loc, 1)
     '{' => Token::new(LBrace, loc, 1)
     '}' => Token::new(RBrace, loc, 1) 
     '(' => Token::new(LPar, loc, 1)
@@ -73,11 +71,26 @@ pub fn Lexer::next(self: Lexer) -> Token {
     ';' => Token::new(Semicolon, loc, 1)
     '.' => Token::new(Dot, loc, 1)
     
+    '+' => {
+      if (self.check("=")) {
+        return Token::new(PlusEq, loc, 2);
+      }
+      Token::new(Plus, loc, 1) 
+    }
     '-' => {
       if (self.check(">")) {
         return Token::new(Arrow, loc, 2);
       }
+      if (self.check("=")) {
+        return Token::new(MinusEq, loc, 2);
+      }
       Token::new(Minus, loc, 1)
+    }
+    '*' => {
+      if (self.check("=")) {
+        return Token::new(StarEq, loc, 2);
+      }
+      Token::new(Star, loc, 1) 
     }
     '/' => {
       if (self.check("/")) {
@@ -85,7 +98,16 @@ pub fn Lexer::next(self: Lexer) -> Token {
         self.retrace();
         return self.next();
       }
+      if (self.check("=")) {
+        return Token::new(SlashEq, loc, 2);
+      }
       Token::new(Slash, loc, 1)
+    }
+    '%' => {
+      if (self.check("=")) {
+        return Token::new(PercentEq, loc, 2);
+      }
+      Token::new(Percent, loc, 1)
     }
     '=' => {
       if (self.check("=")) {
@@ -132,6 +154,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
         "pub" => Token::new(Pub, loc, 3)
         "while" => Token::new(While, loc, 5)
         "for" => Token::new(For, loc, 3)
+        "mut" => Token::new(Mut, loc, 3)
         _ => Token::new(Ident(str), loc, name.length());
       }
     }
