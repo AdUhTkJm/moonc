@@ -1,6 +1,6 @@
 {
   "name": "AdUhTkJm/moonc",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "deps": {
     "Yoorkin/ArgParser": "0.1.9",
     "moonbitlang/x": "0.4.28"
@@ -9,6 +9,6 @@
   "repository": "https://github.com/AdUhTkJm/moonc",
   "license": "GPL-3.0-or-later",
   "keywords": ["parser"],
-  "description": "A parser for Moonbit language.",
+  "description": "A parser to parse Moonbit language itself.",
   "source": "src"
 }

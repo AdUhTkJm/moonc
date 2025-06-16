@@ -1,13 +1,13 @@
 pub(all) enum TokenType {
   // Literals
-  Ident(String)     // [a-z_][\w_\d]*
-  Typename(String)  // [A-Z][\w_\d]*
-  Int(Int)          // 0 ~ 2147483647
-  Double(Double)    // Double literal
-  Float(Float)      // Float literal
-  Str(String)       // "[^"]*"
-  Char(Char)        // '?'
-  Packname(String)  // @[\w\d_]+
+  Ident(String)         // [a-z_][\w_\d]*
+  Typename(String)      // [A-Z][\w_\d]*
+  Int(Int)              // 0 ~ 2147483647
+  Double(Double,String) // Double literal, along with the original string
+  Float(Float)          // Float literal
+  Str(String)           // "[^"]*"
+  Char(Char)            // '?'
+  Packname(String)      // @[\w\d_]+
 
   // Keywords
   Let
@@ -165,7 +165,7 @@ pub impl Show for TokenType with to_string(self) -> String {
     Derive => "derive"
     Is => "is"
     Str(x) => "string literal \"\{x}\""
-    Double(x) => "double literal \{x}"
+    Double(_, str) => "double literal \{str}"
     Float(x) => "float literal \{x}"
     Int(x) => "integer literal \{x}"
     Typename(x) => "type name '\{x}'"

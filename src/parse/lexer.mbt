@@ -408,7 +408,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
         }
         if (fp) {
           let vf = parse_double(digits, loc);
-          return Token::new(Double(vf), loc, digits.length());
+          return Token::new(Double(vf, String::from_array(digits)), loc, digits.length());
         }
         let vi = parse_hex(digits, loc);
         return Token::new(Int(vi), loc, digits.length());
@@ -452,7 +452,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
         }
         if (fp) {
           let vf = parse_double(digits, loc);
-          return Token::new(Double(vf), loc, digits.length());
+          return Token::new(Double(vf, String::from_array(digits)), loc, digits.length());
         }
         let vi = @utils.ite(octal, parse_oct, parse_dec)(digits, loc);
         return Token::new(Int(vi), loc, digits.length());
@@ -488,7 +488,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
           return Token::new(Float(vf), loc, digits.length());
         }
         let vf = parse_double(digits, loc);
-        return Token::new(Double(vf), loc, digits.length());
+        return Token::new(Double(vf, String::from_array(digits)), loc, digits.length());
       } else {
         return Token::new(Dot, loc, 1);
       }

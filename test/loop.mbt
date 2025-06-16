@@ -8,4 +8,8 @@ fn main {
   } else {
     println("Hello World!");
   }
+  for x in [1, 2] {
+    println(x);
+  }
+  let _ = 1;
 }

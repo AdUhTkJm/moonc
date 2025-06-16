@@ -241,11 +241,23 @@ pub fn Parser::ifexpr(self: Parser) -> AST {
 
 fn Parser::base_pattern(self: Parser) -> Pattern {
   let tok = self.consumes();
+  if (tok.isa(LPar)) {
+    let pats = []
+    while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
+      pats.push(self.composite_pattern());
+      if (not(self.peek().isa(RPar))) {
+        self.expects(Comma);
+      }
+    }
+    return Tuple(pats);
+  }
+
   match tok.ty {
     Int(x) => Int(x)
     Char(x) => Char(x)
     Str(x) => Str(x)
     Typename(x) => Enum(x, [])
+    Ident("_") => Default
     _ => {
       @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected match pattern");
       Unknown
@@ -253,16 +265,17 @@ fn Parser::base_pattern(self: Parser) -> Pattern {
   }
 }
 
-pub fn Parser::pattern(self: Parser) -> Pattern {
+pub fn Parser::composite_pattern(self: Parser) -> Pattern {
   let from = self.peek().loc;
   let pattern = self.base_pattern();
+
   if (self.check(LPar)) {
     if (pattern is Enum(x, [])) {
       let bindings = [];
-      while (not(self.check(RPar)) && not(self.peek().isa(EOF))) {
+      while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
         bindings.push(self.expect_ident());
         if (not(self.peek().isa(RPar))) {
-          self.expect(Comma);
+          self.expects(Comma);
         }
       }
       return Enum(x, bindings);
@@ -271,6 +284,12 @@ pub fn Parser::pattern(self: Parser) -> Pattern {
       return pattern;
     }
   }
+
+  pattern
+}
+
+pub fn Parser::range_pattern(self: Parser) -> Pattern {
+  let pattern = self.composite_pattern();
 
   if (self.check(IncRange)) {
     let qattern = self.base_pattern();
@@ -282,7 +301,25 @@ pub fn Parser::pattern(self: Parser) -> Pattern {
     return ExcRange(pattern, qattern);
   }
 
-  pattern
+  return pattern;
+}
+
+pub fn Parser::or_pattern(self: Parser) -> Pattern {
+  let pats = [self.range_pattern()];
+  
+  while (self.checks(Bitor)) {
+    pats.push(self.range_pattern());
+  }
+  
+  if (pats.length() == 1) {
+    pats[0]
+  } else {
+    Or(pats)
+  }
+}
+
+pub fn Parser::pattern(self: Parser) -> Pattern {
+  self.or_pattern();
 }
 
 pub fn Parser::matchexpr(self: Parser) -> AST {
@@ -402,16 +439,27 @@ pub fn Parser::primary(self: Parser) -> AST {
   match (tok.ty) {
     Ident(name) => AST::new(VarRef(self.unqualified(name)), from, self.loc());
     Int(vi) => AST::new(Int(vi), from, self.loc());
-    Double(vd) => AST::new(Double(vd), from, self.loc());
+    Double(vd, _) => AST::new(Double(vd), from, self.loc());
     Float(vf) => AST::new(Float(vf), from, self.loc());
     Str(vs) => self.fstr(vs);
     True => AST::new(Bool(true), from, self.loc());
     False => AST::new(Bool(false), from, self.loc());
     Char(vc) => AST::new(Char(vc), from, self.loc());
     LPar => {
-      let what = self.expr();
-      self.expect(RPar);
-      what;
+      let exprs = [];
+      while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
+        exprs.push(self.expr());
+        if (not(self.peek().isa(RPar))) {
+          self.expects(Comma);
+        }
+      }
+      if (exprs.is_empty()) {
+        AST::new(Unit, from, self.loc())
+      } else if (exprs.length() == 1) {
+        exprs[0]
+      } else {
+        AST::new(TupleMake(exprs), from, self.loc())
+      }
     }
     LBrace => {
       let old = self.place;
@@ -420,7 +468,7 @@ pub fn Parser::primary(self: Parser) -> AST {
         let base = self.expr();
         self.expects(Comma);
         
-        // Now replicate the logic below.
+        // Replicated from below.
         let map = Map::new();
         while (not(self.checks(RBrace)) && not(self.peek().isa(EOF))) {
           let ident = self.expect_idents();
@@ -539,7 +587,22 @@ pub fn Parser::postfix(self: Parser) -> AST {
   let from = self.peek().loc;
   let mut n = self.primary();
   
-  while (self.peek().is_any([LPar, Dot, LBracket])) {
+  while (self.peek().is_any([LPar, Dot, LBracket, Double(0, "")])) {
+    if (self.peek().ty is Double(_, w)) {
+      self.consume() |> ignore;
+      // This is actually things like t.0, t.1;
+      // but it's lexed as 't' .0, 't' .1.
+      // We have the original representation of the string for this.
+      let chars = w.to_array();
+      if (chars[0] != '.') {
+        @diag.error(from, self.loc(), "unexpected double literal: \{w}");
+        continue;
+      }
+      let ind = parse_dec(chars[1:].to_array(), from)
+      n = AST::new(TupleAccess(n, ind), from, self.loc());
+      continue;
+    }
+
     if (self.check(Dot)) {
       let field = self.expect_ident();
       n = AST::new(FieldRef(n, field), from, self.loc());
@@ -745,16 +808,37 @@ pub fn Parser::stmt(self: Parser) -> AST {
   let from = self.peek().loc;
   match (self.consume().ty) {
     Let => {
+      // Tuple declaration.
+      if (self.checks(LPar)) {
+        let names = [];
+        while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
+          names.push(self.expect_ident());
+          if (not(self.peek().isa(RPar))) {
+            self.expects(Comma);
+          }
+        }
+        let mut ty = None;
+        if (self.checks(Colon)) {
+          ty = Some(self.typename());
+        }
+        self.expects(Assign);
+        let init = self.exprs();
+        self.semicolon();
+        let ast = AST::new(TupleDecl(names, init), from, self.loc());
+        if (ty is Some(x)) {
+          ast.ty = x;
+        }
+        return ast;
+      }
+
       let mutable = self.checks(Mut);
       let name = self.expect_idents();
       let mut ty = None;
-      // Check (: Ty)
       if (self.checks(Colon)) {
         ty = Some(self.typename());
       }
       self.expects(Assign);
-      self.strip();
-      let init = self.expr();
+      let init = self.exprs();
       self.semicolon();
       let ast = AST::new(VarDecl(name, mutable, init), from, self.loc());
       if (ty is Some(x)) {
@@ -868,7 +952,8 @@ pub fn Parser::block(self: Parser) -> AST {
   self.strip();
   while (not(self.check(RBrace)) && not(self.check(EOF))) {
     content.push(self.stmt());
-    if (self.checks(EOF)) {
+    self.strip();
+    if (self.check(EOF)) {
       @diag.error(from, from.advance(1), "left brace is never closed");
       break;
     }

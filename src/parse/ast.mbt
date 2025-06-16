@@ -43,6 +43,8 @@ pub(all) enum Pattern {
   Str(String)
   Enum(String, Array[String])
   Or(Array[Pattern])
+  Tuple(Array[Pattern])
+  Default
   Unknown
 }
 
@@ -83,6 +85,8 @@ pub(all) enum ASTType {
   StructModif(AST, Map[String, AST])
   ParamDecl(String)
   VarDecl(String, Bool, AST)      // bool: mutable
+  TupleDecl(Array[String], AST)
+  TupleMake(Array[AST])
   GlobalDecl(Visible, Name, AST)
   EnumDecl(Visible, Name, Array[(String, Array[Type])], Array[Name])
   EnumConstr(Name, Array[AST])
@@ -114,6 +118,8 @@ pub(all) enum ASTType {
   ExcRange(AST, AST)
   ArrAccess(AST, AST)
   Is(AST, Pattern)
+  TupleAccess(AST, Int)
+  Unit
   Leaf
 }
 
@@ -210,6 +216,11 @@ pub impl Show for Pattern with to_string(self) -> String {
       "\{x}\{params}"
     }
     Or(arr) => arr.map(Pattern::to_string).join(" | ")
+    Tuple(arr) => {
+      let s = arr.map(Pattern::to_string).join(", ");
+      "(\{s})"
+    }
+    Default => "_"
   }
 }
 
@@ -242,6 +253,7 @@ fn dep_str(ast: AST, depth: Int) -> String {
     VarRef(name) => "\{name}"
     Bool(vb) => "\{vb}"
     Char(vc) => "'\{vc}'"
+    Unit => "()"
     Fstr(vs) => "F:" + vs.map(fn (x) { dep_str(x, depth) }).join(" ") + ":F"
     Arr(arr) => {
       let s = arr.map(fn (x) { dep_str(x, depth) }).join(", ");
@@ -263,6 +275,14 @@ fn dep_str(ast: AST, depth: Int) -> String {
     VarDecl(name, mutable, init) => {
       let mutable = @utils.ite(mutable, "mut ", "");
       "let \{mutable}\{name} = \{dep_str(init, depth)}"
+    }
+    TupleDecl(names, init) => {
+      let name = names.join(", ");
+      "let (\{name}) = \{dep_str(init, depth)}"
+    }
+    TupleMake(arr) => {
+      let s = arr.map(fn (x) { dep_str(x, depth) }).join(", ");
+      "(\{s})"
     }
     GlobalDecl(visible, name, init) => {
       let visible = @utils.ite(visible == Priv, "", "\{visible} ")
@@ -370,6 +390,7 @@ fn dep_str(ast: AST, depth: Int) -> String {
       "match \{dep_str(matcher, depth)} {\n\{s}\n\{indent}}"
     }
     Is(x, pat) => "(\{dep_str(x, depth)} is \{pat})"
+    TupleAccess(x, v) => "\{dep_str(x, depth)}.\{v}"
     Continue => "continue"
     Leaf => "<leaf>"
   }
@@ -397,6 +418,9 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     FnDecl(visible, name, params, body) => FnDecl(visible, name, params, body.map(f))
     ImplDecl(visible, struct_, trait_, func, params, body) => ImplDecl(visible, struct_, trait_, func, params, body.map(f))
     VarDecl(name, mutable, init) => VarDecl(name, mutable, init.map(f))
+    TupleDecl(name, init) => TupleDecl(name, init.map(f))
+    TupleAccess(x, v) => TupleAccess(x.map(f), v)
+    TupleMake(arr) => TupleMake(arr.map(f))
     GlobalDecl(visible, name, init) => GlobalDecl(visible, name, init.map(f))
     If(cond, l, r) => If(cond.map(f), l.map(f), r.map(f))
     Binary(kind, l, r) => Binary(kind, l.map(f), r.map(f))
@@ -423,7 +447,8 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     Is(x, pat) => Is(x.map(f), pat)
     Int(_) | VarRef(_) | ParamDecl(_) | Leaf |
     StructDecl(_) | Double(_) | Float(_) | Str(_) |
-    Continue | EnumDecl(_) | Bool(_) | Char(_) => self.kind
+    Continue | EnumDecl(_) | Bool(_) | Char(_) |
+    Unit => self.kind
   },
     from: self.from,
     to: self.to,
