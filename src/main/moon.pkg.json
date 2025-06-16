@@ -2,6 +2,8 @@
   "is-main": true,
   "import": [
     "AdUhTkJm/moonc/parse",
-    "AdUhTkJm/moonc/diag"
+    "AdUhTkJm/moonc/diag",
+    "moonbitlang/x/fs",
+    "Yoorkin/ArgParser/"
   ]
 }

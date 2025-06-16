@@ -12,6 +12,13 @@ pub(all) enum TokenType {
   Return
   If
   Else
+  Struct
+  Pub
+  Pubopen
+  Puball
+  Priv
+  While
+  For
 
   // Operators
   LBrace            // {
@@ -30,6 +37,7 @@ pub(all) enum TokenType {
   Bang              // !
   Comma             // ,
   Colon             // :
+  ColonColon        // ::
   Assign            // =
   Eq                // ==
   Lt                // <
@@ -37,6 +45,9 @@ pub(all) enum TokenType {
   Gt                // >
   Ge                // >=
   Ne                // !=
+  Arrow             // ->
+  Arrrow            // =>
+  Dot               // .
 
   // Special
   EOF
@@ -48,6 +59,7 @@ pub impl Show for TokenType with to_string(self) -> String {
   match (self) {
     EOF => "<EOF>"
     Colon => "':'"
+    ColonColon => "'::'"
     Comma => "','"
     Bang => "'!'"
     Ques => "'?'"
@@ -70,11 +82,21 @@ pub impl Show for TokenType with to_string(self) -> String {
     Gt => "'>'"
     Ge => "'>='"
     Ne => "'!='"
+    Arrow => "'->'"
+    Arrrow => "'=>'"
+    Dot => "'.'"
     Fn => "fn"
     Let => "let"
     Return => "return"
     If => "if"
     Else => "else"
+    Struct => "struct"
+    Pub => "pub"
+    Pubopen => "pub(open)"
+    Puball => "pub(all)"
+    Priv => "priv"
+    While => "while"
+    For => "for"
     Str(_) => "string literal"
     FP(_) => "floating-point literal"
     Int(_) => "integer literal"

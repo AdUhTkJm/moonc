@@ -50,6 +50,10 @@ pub fn report() -> Bool {
   
   for diag in env.diags {
     println("\{diag.from}: error: \{diag.msg}")
+    if (diag.from.unknown || diag.to.unknown) {
+      continue;
+    }
+    
     let file = env.content.get(diag.from.filename).unwrap();
     let frominfo = file.find(diag.from.charpos);
     let toinfo = file.find(diag.to.charpos);

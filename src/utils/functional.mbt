@@ -6,3 +6,7 @@ pub fn[T] any(arr: Array[T], f: (T) -> Bool) -> Bool {
   }
   return false;
 }
+
+pub fn[T] ite(x: Bool, a: T, b: T) -> T {
+  if (x) { a } else { b }
+}

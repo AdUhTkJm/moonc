@@ -105,6 +105,14 @@ pub fn Parser::typename(self: Parser) -> Type {
   }
 }
 
+pub fn Parser::visible(self: Parser) -> Visible {
+  let tok = self.consume();
+  match (tok.ty) {
+    Pub => Pub
+    _ => { self.retrace(); Priv }
+  }
+}
+
 pub fn Parser::ifexpr(self: Parser) -> AST {
   let from = self.peek().loc;
 
@@ -225,9 +233,8 @@ pub fn Parser::semicolon(self: Parser) -> Unit {
 
 pub fn Parser::stmt(self: Parser) -> AST {
   let from = self.peek().loc;
-  match (self.peek().ty) {
+  match (self.consume().ty) {
     Let => {
-      let _ = self.consume();
       let name = self.expect_ident();
       let mut ty = None;
       // Check (: Ty)
@@ -244,12 +251,15 @@ pub fn Parser::stmt(self: Parser) -> AST {
       return ast;
     }
     Return => {
-      self.consume() |> ignore;
+      if (self.check(Newline)) {
+        return AST::new(Return(None), from, self.loc());
+      }
       let expr = self.expr();
       self.semicolon();
-      return AST::new(Return(expr), from, self.loc());
+      return AST::new(Return(Some(expr)), from, self.loc());
     }
     _ => {
+      self.retrace();
       let expr = self.expr();
       self.semicolon();
       return expr;
@@ -274,7 +284,7 @@ pub fn Parser::block(self: Parser) -> AST {
   return AST::new(Block(content), from, self.loc());
 }
 
-pub fn Parser::fndecl(self: Parser) -> AST {
+pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
   self.strip();
   let from = self.peek().loc;
   let name = self.expect_ident();
@@ -299,34 +309,80 @@ pub fn Parser::fndecl(self: Parser) -> AST {
       }
     }
   }
+  // Check the optional return type.
+  let mut retTy = None;
+  if (self.check(Arrow)) {
+    retTy = Some(self.typename());
+  }
+
   let block = self.block();
-  return AST::new(FnDecl(name, args, block), from, self.loc());
+  // FnDecl only records its return type;
+  // the function type can be inferred from `args`.
+  let ast = AST::new(FnDecl(visible, name, args, block), from, self.loc());
+  if (retTy is Some(x)) {
+    ast.ty = x;
+  }
+  return ast;
 }
 
-pub fn Parser::toplevel(self: Parser) -> AST {
+pub fn Parser::structdecl(self: Parser, visible: Visible) -> AST {
+  self.strip();
+  let from = self.peek().loc;
+  let name = self.expect_typename();
+  let fields = [];
+  self.expect(LBrace);
+  self.strip();
+  while (not(self.check(RBrace))) {
+    let name = self.expect_ident();
+    self.expect(Colon);
+    let ty = self.typename();
+    fields.push((name, ty));
+    if (not(self.peek().isa(RBrace))) {
+      self.expect(Newline);
+    }
+    self.strip();
+  }
+  return AST::new(StructDecl(visible, name, fields), from, self.loc());
+}
+
+pub fn Parser::toplevel(self: Parser, visible: Visible) -> AST {
+  let tok = self.consume();
+  match (tok.ty) {
+    Fn => self.fndecl(visible);
+    Struct => self.structdecl(visible);
+    EOF => AST::new(Leaf, @diag.Loc::unknown(), @diag.Loc::unknown());
+    Newline => self.toplevel(visible);
+    Pub | Pubopen | Puball | Priv => {
+      self.retrace();
+      let visible = self.visible();
+      return self.toplevel(visible);
+    }
+    _ => {
+      @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected top-level token \{tok.ty}");
+      self.ignore_until([Fn, Struct]);
+      self.retrace();
+      return self.toplevel(visible);
+    }
+  }
+}
+
+pub fn Parser::toplevel_block(self: Parser) -> AST {
   let top = [];
 
   while (not(self.peek().isa(EOF))) {
-    let tok = self.consume();
-    match (tok.ty) {
-      Fn => top.push(self.fndecl());
-      EOF => break;
-      Newline => continue;
-      _ => {
-        @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected top-level token \{tok.ty}");
-        self.ignore_until([Fn]);
-        self.retrace();
-        continue;
-      }
+    let ast = self.toplevel(Priv);
+    if (ast.kind is Leaf) {
+      break;
     }
+    top.push(ast);
   }
   return AST::new(Block(top), self.data[0].loc, self.loc());
 }
 
 pub fn Parser::parse(self: Parser) -> AST {
   if self.data.length() == 0 {
-    panic();
+    return AST::new(Leaf, @diag.Loc::unknown(), @diag.Loc::unknown())
   }
-  let top = self.toplevel();
+  let top = self.toplevel_block();
   return top.remove_leaf();
 }

@@ -64,7 +64,6 @@ pub fn Lexer::next(self: Lexer) -> Token {
   let c = self.ch();
   match c {
     '+' => Token::new(Plus, loc, 1) 
-    '-' => Token::new(Minus, loc, 1)
     '*' => Token::new(Star, loc, 1)
     '{' => Token::new(LBrace, loc, 1)
     '}' => Token::new(RBrace, loc, 1) 
@@ -72,7 +71,14 @@ pub fn Lexer::next(self: Lexer) -> Token {
     ')' => Token::new(RPar, loc, 1)
     ',' => Token::new(Comma, loc, 1)
     ';' => Token::new(Semicolon, loc, 1)
-    ':' => Token::new(Colon, loc, 1)
+    '.' => Token::new(Dot, loc, 1)
+    
+    '-' => {
+      if (self.check(">")) {
+        return Token::new(Arrow, loc, 2);
+      }
+      Token::new(Minus, loc, 1)
+    }
     '/' => {
       if (self.check("/")) {
         for c = self.ch(); not(c is '\n'); c = self.ch() { }
@@ -83,8 +89,10 @@ pub fn Lexer::next(self: Lexer) -> Token {
     }
     '=' => {
       if (self.check("=")) {
-        self.advance(1);
         return Token::new(Eq, loc, 2);
+      }
+      if (self.check(">")) {
+        return Token::new(Arrrow, loc, 2);
       }
       Token::new(Assign, loc, 1)
     }
@@ -100,7 +108,13 @@ pub fn Lexer::next(self: Lexer) -> Token {
       }
       Token::new(Gt, loc, 1)
     }
-    
+    ':' => {
+      if (self.check(":")) {
+        return Token::new(ColonColon, loc, 2);
+      }
+      Token::new(Colon, loc, 1)
+    }
+
     'a'..='z' | '_' => {
       let name = [c];
       for c = self.ch(); c is ('a'..='z' | 'A' ..= 'Z' | '_'); c = self.ch() {
@@ -114,6 +128,10 @@ pub fn Lexer::next(self: Lexer) -> Token {
         "return" => Token::new(Return, loc, 6)
         "if" => Token::new(If, loc, 2)
         "else" => Token::new(Else, loc, 4)
+        "struct" => Token::new(Struct, loc, 6)
+        "pub" => Token::new(Pub, loc, 3)
+        "while" => Token::new(While, loc, 5)
+        "for" => Token::new(For, loc, 3)
         _ => Token::new(Ident(str), loc, name.length());
       }
     }
