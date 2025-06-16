@@ -68,11 +68,12 @@ pub(all) enum ASTType {
   Double(Double)
   Float(Float)
   Str(String)
+  Bool(Bool)
   Arr(Array[AST])
   Continue
   Break(Option[AST])
   While(AST, AST, Option[AST])
-  For(AST, AST, AST, AST, Option[AST])
+  For(String, AST, AST, AST, AST, Option[AST])
   ForIn(String, AST, AST, Option[AST])
   Match(AST, Array[(Pattern, AST)])
   IncRange(AST, AST)
@@ -194,6 +195,7 @@ fn dep_str(ast: AST, depth: Int) -> String {
     Float(vf) => "\{vf}F"
     Str(vs) => "R\"(\{vs})\""
     VarRef(name) => "\{name}"
+    Bool(vb) => "\{vb}"
     Arr(arr) => {
       let s = arr.map(fn (x) { dep_str(x, depth) }).join(", ");
       "[\{s}]"
@@ -210,7 +212,7 @@ fn dep_str(ast: AST, depth: Int) -> String {
     }
     Binary(kind, l, r) => "(\{dep_str(l, depth)} \{kind} \{dep_str(r, depth)})"
     BinaryInplace(kind, l, r) => "\{dep_str(l, depth)} \{kind}= \{dep_str(r, depth)}"
-    Unary(kind, l) => "(\{kind} \{dep_str(l, depth)})"
+    Unary(kind, l) => "(\{kind}\{dep_str(l, depth)})"
     VarDecl(name, mutable, init) => {
       let mutable = @utils.ite(mutable, "mut ", "");
       "let \{mutable}\{name} = \{dep_str(init, depth)}"
@@ -286,20 +288,20 @@ fn dep_str(ast: AST, depth: Int) -> String {
     }
     FieldRef(x, name) => "\{dep_str(x, depth)}.\{name}"
     Break(val) => {
-      let v = val.map_or("", fn (x) { dep_str(x, depth) });
-      "break \{v}";
+      let v = val.map_or("", fn (x) { " \{dep_str(x, depth)}" });
+      "break\{v}";
     }
     While(cond, body, exit) => {
       let v = exit.map_or("", fn (x) { "else \{dep_str(x, depth)}" });
       "while \{dep_str(cond, depth)} \{dep_str(body, depth)} \{v}";
     }
-    For(start, stop, step, body, exit) => {
-      let v = exit.map_or("", fn (x) { "else \{dep_str(x, depth)}" });
-      "for \{dep_str(start, depth)}; \{dep_str(stop, depth)}; \{dep_str(step, depth)} \{dep_str(body, depth)} \{v}"
+    For(name, start, stop, step, body, exit) => {
+      let v = exit.map_or("", fn (x) { " else \{dep_str(x, depth)}" });
+      "for \{name} = \{dep_str(start, depth)}; \{dep_str(stop, depth)}; \{name} = \{dep_str(step, depth)} \{dep_str(body, depth)}\{v}"
     }
     ForIn(name, range, body, exit) => {
-      let v = exit.map_or("", fn (x) { "else \{dep_str(x, depth)}" });
-      "for \{name} in \{dep_str(range, depth)}; \{dep_str(body, depth)} \{dep_str(body, depth)} \{v}"
+      let v = exit.map_or("", fn (x) { " else \{dep_str(x, depth)}" });
+      "for \{name} in \{dep_str(range, depth)}; \{dep_str(body, depth)} \{dep_str(body, depth)}\{v}"
     }
     IncRange(begin, end) => "\{dep_str(begin, depth)}..=\{dep_str(end, depth)}"
     ExcRange(begin, end) => "\{dep_str(begin, depth)}..<\{dep_str(end, depth)}"
@@ -350,7 +352,7 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     Arr(arr) => Arr(arr.map(f))
     Break(val) => Break(val.map(f))
     While(cond, body, exit) => While(cond.map(f), body.map(f), exit.map(f))
-    For(start, stop, step, body, exit) => For(start.map(f), stop.map(f), step.map(f), body.map(f), exit.map(f))
+    For(name, start, stop, step, body, exit) => For(name, start.map(f), stop.map(f), step.map(f), body.map(f), exit.map(f))
     ForIn(indvar, range, body, exit) => ForIn(indvar, range.map(f), body.map(f), exit.map(f));
     EnumConstr(name, arr) => EnumConstr(name, arr.map(f))
     IncRange(x, y) => IncRange(x.map(f), y.map(f))
@@ -358,7 +360,7 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     Match(matcher, arr) => Match(matcher.map(f), arr.map(fn (t) { (t.0, t.1.map(f)) }))
     Int(_) | VarRef(_) | ParamDecl(_) | Leaf |
     StructDecl(_) | Double(_) | Float(_) | Str(_) |
-    Continue | EnumDecl(_) => self.kind
+    Continue | EnumDecl(_) | Bool(_) => self.kind
   },
     from: self.from,
     to: self.to,

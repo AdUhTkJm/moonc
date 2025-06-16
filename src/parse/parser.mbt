@@ -276,6 +276,8 @@ pub fn Parser::primary(self: Parser) -> AST {
     Double(vd) => AST::new(Double(vd), from, self.loc());
     Float(vf) => AST::new(Float(vf), from, self.loc());
     Str(vs) => AST::new(Str(vs), from, self.loc());
+    True => AST::new(Bool(true), from, self.loc());
+    False => AST::new(Bool(false), from, self.loc());
     LPar => {
       let what = self.expr();
       self.expect(RPar);
@@ -496,12 +498,75 @@ pub fn Parser::stmt(self: Parser) -> AST {
       return ast;
     }
     Return => {
-      if (self.check(Newline)) {
+      if (self.check(Newline) || self.check(Semicolon)) {
         return AST::new(Return(None), from, self.loc());
       }
       let expr = self.expr();
       self.semicolon();
       return AST::new(Return(Some(expr)), from, self.loc());
+    }
+    Break => {
+      if (self.check(Newline) || self.check(Semicolon)) {
+        return AST::new(Break(None), from, self.loc());
+      }
+      let expr = self.expr();
+      self.semicolon();
+      return AST::new(Break(Some(expr)), from, self.loc());
+    }
+    While => {
+      self.strip();
+      let cond = self.expr();
+      let body = self.block();
+      let mut exit = None;
+      if (self.checks(Else)) {
+        exit = Some(self.block());
+      }
+      return AST::new(While(cond, body, exit), from, self.loc());
+    }
+    For => {
+      self.strip();
+      let name = self.expect_ident();
+      if (self.checks(In)) {
+        let range = self.expr();
+        let body = self.block();
+        let mut exit = None;
+        if (self.checks(Else)) {
+          exit = Some(self.block());
+        }
+        return AST::new(ForIn(name, range, body, exit), from, self.loc());
+      }
+      self.expects(Assign);
+      self.strip();
+      let start = self.expr();
+
+      self.expects(Semicolon);
+      self.strip();
+      let cond = self.expr();
+
+      self.expects(Semicolon);
+      self.strip();
+      let name2 = self.expect_ident();
+      if (name2 != name) {
+        @diag.error(self.data[self.place - 1].loc, self.loc(), "mutating non-induction variable \{name2}");
+      }
+
+      self.expects(Assign);
+      self.strip();
+      let newval = self.expr();
+
+      let body = self.block();
+
+      let mut exit = None;
+      if (self.checks(Else)) {
+        exit = Some(self.block());
+      }
+      return AST::new(For(name, start, cond, newval, body, exit), from, self.loc());
+    }
+    Continue => {
+      if (not(self.check(Newline)) && not(self.check(Semicolon))) {
+        @diag.error(from, self.loc(), "continue should occupy a single line");
+      }
+      AST::new(Continue, from, self.loc());
     }
     _ => {
       self.retrace();

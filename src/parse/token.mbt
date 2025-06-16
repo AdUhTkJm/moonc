@@ -33,6 +33,7 @@ pub(all) enum TokenType {
   Continue
   True
   False
+  In
 
   // Operators
   LBrace            // {
@@ -137,6 +138,7 @@ pub impl Show for TokenType with to_string(self) -> String {
     Continue => "continue"
     True => "true"
     False => "false"
+    In => "in"
     Str(x) => "string literal \"\{x}\""
     Double(x) => "double literal \{x}"
     Float(x) => "float literal \{x}"
