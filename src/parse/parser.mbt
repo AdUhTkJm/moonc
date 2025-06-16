@@ -105,6 +105,17 @@ pub fn Parser::qualified(self: Parser, namespace: String, x: String) -> Name {
   Name::qualified(self.pack, namespace, x);
 }
 
+pub fn Parser::basetype(self: Parser) -> Type {
+  let ty = self.expect_typename();
+  match (ty) {
+    "Int" => Int
+    "Float" => Float
+    "Double" => Double
+    "Unit" => Unit
+    _ => Named(ty, [])
+  }
+}
+
 pub fn Parser::typename(self: Parser) -> Type {
   self.strip();
   if (self.check(LPar)) {
@@ -122,14 +133,28 @@ pub fn Parser::typename(self: Parser) -> Type {
     let ret = self.typename();
     return Function(args, ret);
   }
-  let ty = self.expect_typename();
-  match (ty) {
-    "Int" => Int
-    "Float" => Float
-    "Double" => Double
-    "Unit" => Unit
-    _ => Named(ty, [])
+  let from = self.peek().loc;
+  let ty = self.basetype();
+  if (self.check(LBracket)) {
+    // Type arguments
+    let args = [];
+    while (not(self.check(RBracket)) && not(self.peek().isa(EOF))) {
+      let argTy = self.typename();
+      args.push(argTy);
+      if (not(self.peek().isa(RBracket))) {
+        self.expect(Comma);
+      }
+      self.strip();
+    }
+
+    if (ty is Named(x, [])) {
+      return Named(x, args);
+    } else {
+      @diag.error(from, self.loc(), "builtin type \{ty} does not accept parameters");
+      return ty;
+    }
   }
+  return ty;
 }
 
 pub fn Parser::visible(self: Parser) -> Visible {
@@ -161,6 +186,7 @@ pub fn Parser::primary(self: Parser) -> AST {
     Int(vi) => AST::new(Int(vi), from, self.loc());
     Double(vd) => AST::new(Double(vd), from, self.loc());
     Float(vf) => AST::new(Float(vf), from, self.loc());
+    Str(vs) => AST::new(Str(vs), from, self.loc());
     LPar => {
       let what = self.expr();
       self.expect(RPar);
@@ -198,8 +224,6 @@ pub fn Parser::primary(self: Parser) -> AST {
       // Ty::field
       self.expect(ColonColon);
       let name = self.expect_ident();
-      println(name);
-      println(self.peek());
       AST::new(VarRef(self.qualified(ty, name)), from, self.loc());
     }
     _ => {
@@ -386,7 +410,7 @@ pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
   let from = self.peek().loc;
   let hasname = self.peek().isa(Ident(""));
   let hastypename = self.peek().isa(Typename(""));
-  // Cannot ite here when operands have side-effects.
+  // Cannot use `ite` here when operands have side-effects.
   let name = if (hasname) {
     self.unqualified(self.expect_ident())
   } else if (hastypename) {

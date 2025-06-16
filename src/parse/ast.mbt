@@ -54,6 +54,7 @@ pub(all) enum ASTType {
   ThisCall(AST, String, Array[AST])
   Double(Double)
   Float(Float)
+  Str(String)
   Leaf
 }
 
@@ -149,6 +150,7 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
     Int(vi) => "\{vi}"
     Double(vd) => "\{vd}"
     Float(vf) => "\{vf}F"
+    Str(vs) => "R\"(\{vs})\""
     VarRef(name) => "\{name}"
     Block(arr) => {
       let builder = StringBuilder::new();
@@ -250,7 +252,8 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     ThisCall(x, name, args) => ThisCall(x.map(f), name, args.map(mapper));
     FieldRef(x, name) => FieldRef(x.map(f), name)
     StructInit(map) => StructInit(Map::from_array(map.to_array().map(fn (t) { (t.0, t.1.map(f)) })))
-    Int(_) | VarRef(_) | ParamDecl(_) | Leaf | StructDecl(_) | Double(_) | Float(_) => self.kind
+    Int(_) | VarRef(_) | ParamDecl(_) | Leaf |
+    StructDecl(_) | Double(_) | Float(_) | Str(_) => self.kind
   },
     from: self.from,
     to: self.to,

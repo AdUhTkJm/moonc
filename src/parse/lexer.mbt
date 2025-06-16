@@ -46,7 +46,7 @@ fn Lexer::advance(self: Lexer, i: Int) -> Unit {
 fn Lexer::check(self: Lexer, str: String) -> Bool {
   let len = str.char_length();
   let arr = str.to_array();
-  for i in @utils.range(len) {
+  for i in 0..<len {
     if (self.peek(i) != arr[i]) {
       return false;
     }
@@ -114,14 +114,85 @@ pub fn parse_float(digits: Array[Char], from: @diag.Loc) -> Float {
   }
 }
 
+pub fn Lexer::read_str(self: Lexer) -> String {
+  let loc = @diag.Loc::new(self.filename, self.loc - 1);
+  let result = [];
+  while true {
+    let c = self.ch();
+
+    match c {
+      '\u0000' => {
+        @diag.error(loc, loc.advance(1), "unterminated string literal");
+        break;
+      }
+      '"' => {
+        // Check if the quote is escaped
+        if (result.ends_with(['\\'])) {
+          // It could be an escaped backslash (\\") or an actual escape (\")
+          // We need to check how many backslashes precede this quote
+          let mut slash = 0;
+          for ch in result.rev_iter() {
+            if ch == '\\' {
+              slash += 1;
+            } else {
+              break;
+            }
+          }
+          if slash % 2 == 1 {
+            result.push('"'); // Escaped
+            continue;
+          }
+          // Not escaped
+          break;
+        }
+        break;
+      }
+      '\\' => {
+        let next = self.ch();
+        match next {
+          'n'  => result.push('\n')
+          't'  => result.push('\t')
+          'r'  => result.push('\r')
+          '\\' => result.push('\\')
+          '"'  => result.push('"')
+          '\'' => result.push('\'')
+          '0'  => result.push('\u0000')
+          'u'  => {
+            let digits = [];
+            for i in 0..<4 {
+              let c = self.ch();
+              if (not(c is ('0'..='9' | 'a'..='f' | 'A'..='F'))) {
+                @diag.error(loc, loc.advance(i), "unexpected unicode escape sequence");
+                break;
+              }
+              digits.push(c);
+            }
+            let unicode = parse_hex(digits, loc);
+            result.push(Int::unsafe_to_char(unicode));
+          }
+          _ => {
+            @diag.error(loc, loc.advance(1), ("unknown escape sequence"));
+          }
+        }
+      }
+      _ => {
+        result.push(c);
+      }
+    }
+  }
+  String::from_array(result)
+}
+
 pub fn Lexer::next(self: Lexer) -> Token {
   let loc = @diag.Loc::new(self.filename, self.loc);
   let c = self.ch();
   match c {
     '{' => Token::new(LBrace, loc, 1)
-    '}' => Token::new(RBrace, loc, 1) 
+    '}' => Token::new(RBrace, loc, 1)
     '(' => Token::new(LPar, loc, 1)
     ')' => Token::new(RPar, loc, 1)
+    '[' => Token::new(LBracket, loc, 1)
+    ']' => Token::new(RBracket, loc, 1)
     ',' => Token::new(Comma, loc, 1)
     ';' => Token::new(Semicolon, loc, 1)
     
@@ -353,6 +424,10 @@ pub fn Lexer::next(self: Lexer) -> Token {
       } else {
         return Token::new(Dot, loc, 1);
       }
+    }
+    '"' => {
+      let str = self.read_str();
+      return Token::new(Str(str), loc, str.length() + 2);
     }
     _ => {
       @diag.error(loc, loc.advance(1), "unrecognized character: \{c}");
