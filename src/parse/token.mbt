@@ -36,6 +36,8 @@ pub(all) enum TokenType {
   False
   In
   Try
+  Derive
+  Is
 
   // Operators
   LBrace            // {
@@ -74,9 +76,13 @@ pub(all) enum TokenType {
   ExcRange          // ..<
   Bitand            // &
   Bitor             // |
-  Bitxor            // ^
+  Xor               // ^
   Logand            // &&
   Logor             // ||
+  AndEq             // &=
+  OrEq              // |=
+  XorEq             // ^=
+  Expand            // ..
 
   // Special
   EOF
@@ -123,9 +129,13 @@ pub impl Show for TokenType with to_string(self) -> String {
     ExcRange => "'..<'"
     Bitand => "'&'"
     Bitor => "'|'"
-    Bitxor => "'^'"
+    Xor => "'^'"
     Logand => "'&&'"
     Logor => "'||'"
+    AndEq => "'&='"
+    OrEq => "'|='"
+    XorEq => "'^='"
+    Expand => ".."
     Fn => "fn"
     Let => "let"
     Return => "return"
@@ -152,6 +162,8 @@ pub impl Show for TokenType with to_string(self) -> String {
     False => "false"
     In => "in"
     Try => "try"
+    Derive => "derive"
+    Is => "is"
     Str(x) => "string literal \"\{x}\""
     Double(x) => "double literal \{x}"
     Float(x) => "float literal \{x}"

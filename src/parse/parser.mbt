@@ -60,11 +60,11 @@ pub fn Parser::expect(self: Parser, ty: TokenType) -> Unit {
 }
 
 pub fn Parser::consumes(self: Parser) -> Token {
+  self.strip();
   if self.place >= self.data.length() {
     return Token::new(EOF, self.eof_loc(), 0);
   }
 
-  self.strip();
   let t = self.data[self.place];
   self.place += 1;
   return t;
@@ -96,6 +96,20 @@ pub fn Parser::expect_ident(self: Parser) -> String {
     tok => {
       @diag.error(tok.loc, tok.loc.advance(tok.len), "expected identifier, but got \{tok.ty}");
       self.expect_ident();
+    }
+  }
+}
+
+pub fn Parser::expect_idents(self: Parser) -> String {
+  match self.consumes() {
+    { ty: Ident(x), .. } => x
+    { ty: EOF, loc, len } => {
+      @diag.error(loc, loc.advance(len), "reached EOF on recovery");
+      ""
+    }
+    tok => {
+      @diag.error(tok.loc, tok.loc.advance(tok.len), "expected identifier, but got \{tok.ty}");
+      self.expect_idents();
     }
   }
 }
@@ -134,19 +148,35 @@ pub fn Parser::qualified(self: Parser, namespace: String, x: String) -> Name {
 }
 
 pub fn Parser::basetype(self: Parser) -> Type {
+  let mut pack = self.pack;
+  if (self.peek().ty is Packname(x)) {
+    self.consume() |> ignore;
+    pack = Some(x);
+    self.expect(Dot);
+  }
   let ty = self.expect_typename();
+  if (pack != self.pack) {
+    return Named({ pack: pack, name: ty, namespace: None }, [])
+  }
   match (ty) {
     "Int" => Int
     "Float" => Float
     "Double" => Double
     "Unit" => Unit
-    _ => Named(ty, [])
+    _ => Named(self.unqualified(ty), [])
   }
 }
 
+pub fn Parser::postfix_type(self: Parser) -> Type {
+  let mut ty = self.basetype();
+  while (self.checks(Ques)) {
+    ty = Option(ty);
+  }
+  return ty;
+}
+
 pub fn Parser::typename(self: Parser) -> Type {
-  self.strip();
-  if (self.check(LPar)) {
+  if (self.checks(LPar)) {
     let args = [];
     while (not(self.check(RPar)) && not(self.peek().isa(EOF))) {
       let ty = self.typename();
@@ -162,7 +192,7 @@ pub fn Parser::typename(self: Parser) -> Type {
     return Function(args, ret);
   }
   let from = self.peek().loc;
-  let ty = self.basetype();
+  let ty = self.postfix_type();
   if (self.check(LBracket)) {
     // Type arguments
     let args = [];
@@ -189,6 +219,9 @@ pub fn Parser::visible(self: Parser) -> Visible {
   let tok = self.consume();
   match (tok.ty) {
     Pub => Pub
+    Puball => Puball
+    Pubopen => Pubopen
+    Priv => Priv
     _ => { self.retrace(); Priv }
   }
 }
@@ -317,7 +350,7 @@ pub fn Parser::fstr(self: Parser, str_: String) -> AST {
         let code = [];
         while (depth > 0) {
           let c = ch();
-          if (pos >= str.length()) {
+          if (pos > str.length()) {
             @diag.error(from, self.loc(), "unterminated f-string literal");
             break;
           } else if (c == '{') {
@@ -374,6 +407,7 @@ pub fn Parser::primary(self: Parser) -> AST {
     Str(vs) => self.fstr(vs);
     True => AST::new(Bool(true), from, self.loc());
     False => AST::new(Bool(false), from, self.loc());
+    Char(vc) => AST::new(Char(vc), from, self.loc());
     LPar => {
       let what = self.expr();
       self.expect(RPar);
@@ -381,18 +415,43 @@ pub fn Parser::primary(self: Parser) -> AST {
     }
     LBrace => {
       let old = self.place;
+      if (self.checks(Expand)) {
+        self.strip();
+        let base = self.expr();
+        self.expects(Comma);
+        
+        // Now replicate the logic below.
+        let map = Map::new();
+        while (not(self.checks(RBrace)) && not(self.peek().isa(EOF))) {
+          let ident = self.expect_idents();
+          map[ident] = if (self.checks(Colon)) {
+            self.exprs();
+          } else {
+            AST::new(VarRef(self.unqualified(ident)), from, from);
+          }
+
+          if (not(self.peek().isa(RBrace))) {
+            self.expects(Comma);
+          }
+        }
+        return AST::new(StructModif(base, map), from, self.loc());
+      }
+
       if (self.checks(Ident(""))) {
         // A struct initializer.
         if (self.checks(Colon)) {
           self.place = old;
           let map = Map::new();
           while (not(self.checks(RBrace)) && not(self.peek().isa(EOF))) {
-            let ident = self.expect_ident();
-            self.expects(Colon);
-            let init = self.expr();
-            map[ident] = init;
-            self.strip();
+            let ident = self.expect_idents();
+            map[ident] = if (self.checks(Colon)) {
+              self.exprs();
+            } else {
+              // The name is omitted.
+              AST::new(VarRef(self.unqualified(ident)), from, from);
+            }
 
+            self.strip();
             if (not(self.peek().isa(RBrace))) {
               self.expects(Comma);
             }
@@ -560,9 +619,27 @@ pub fn Parser::add(self: Parser) -> AST {
 pub fn Parser::cmp(self: Parser) -> AST {
   let from = self.peek().loc;
   let mut n = self.add();
-  while (self.peek().is_any([Lt, Gt, Ge, Lt, Ne, Eq])) {
+  while (self.peek().is_any([Lt, Gt, Ge, Lt])) {
     let cmp = self.consume().ty;
     let x = self.add();
+    let binary = match cmp {
+      Lt => Binary(Lt, n, x)
+      Le => Binary(Le, n, x)
+      Gt => Binary(Lt, x, n)
+      Ge => Binary(Le, x, n)
+      _ => panic()
+    }
+    n = AST::new(binary, from, self.loc());
+  }
+  return n;
+}
+
+pub fn Parser::eq(self: Parser) -> AST {
+  let from = self.peek().loc;
+  let mut n = self.cmp();
+  while (self.peek().is_any([Lt, Gt, Ge, Lt, Ne, Eq])) {
+    let cmp = self.consume().ty;
+    let x = self.cmp();
     let binary = match cmp {
       Lt => Binary(Lt, n, x)
       Le => Binary(Le, n, x)
@@ -577,6 +654,66 @@ pub fn Parser::cmp(self: Parser) -> AST {
   return n;
 }
 
+pub fn Parser::bitand(self: Parser) -> AST {
+  let from = self.peek().loc;
+  let mut n = self.eq();
+  while (self.check(Bitand)) {
+    let x = self.eq();
+    n = AST::new(Binary(Bitand, n, x), from, self.loc());
+  }
+  return n;
+}
+
+pub fn Parser::xor(self: Parser) -> AST {
+  let from = self.peek().loc;
+  let mut n = self.bitand();
+  while (self.check(Xor)) {
+    let x = self.bitand();
+    n = AST::new(Binary(Xor, n, x), from, self.loc());
+  }
+  return n;
+}
+
+pub fn Parser::bitor(self: Parser) -> AST {
+  let from = self.peek().loc;
+  let mut n = self.xor();
+  while (self.check(Bitor)) {
+    let x = self.xor();
+    n = AST::new(Binary(Bitor, n, x), from, self.loc());
+  }
+  return n;
+}
+
+pub fn Parser::logand(self: Parser) -> AST {
+  let from = self.peek().loc;
+  let mut n = self.bitor();
+  while (self.check(Logand)) {
+    let x = self.bitor();
+    n = AST::new(Binary(And, n, x), from, self.loc());
+  }
+  return n;
+}
+
+pub fn Parser::logor(self: Parser) -> AST {
+  let from = self.peek().loc;
+  let mut n = self.logand();
+  while (self.check(Logor)) {
+    let x = self.logand();
+    n = AST::new(Binary(Or, n, x), from, self.loc());
+  }
+  return n;
+}
+
+pub fn Parser::ismatch(self: Parser) -> AST {
+  let from = self.peek().loc;
+  let mut n = self.logor();
+  while (self.check(Is)) {
+    let x = self.pattern();
+    n = AST::new(Is(n, x), from, self.loc());
+  }
+  return n;
+}
+
 pub fn Parser::tryres(self: Parser) -> AST {
   let from = self.peek().loc;
   if (self.checks(Try)) {
@@ -584,11 +721,16 @@ pub fn Parser::tryres(self: Parser) -> AST {
     let after = self.tryres();
     return AST::new(Unary(Try, after), from, self.loc());
   }
-  return self.cmp();
+  return self.ismatch();
 }
 
 pub fn Parser::expr(self: Parser) -> AST {
   return self.tryres();
+}
+
+pub fn Parser::exprs(self: Parser) -> AST {
+  self.strip()
+  return self.expr();
 }
 
 pub fn Parser::semicolon(self: Parser) -> Unit {
@@ -603,18 +745,14 @@ pub fn Parser::stmt(self: Parser) -> AST {
   let from = self.peek().loc;
   match (self.consume().ty) {
     Let => {
-      self.strip();
-      let mutable = self.check(Mut);
-      self.strip();
-      let name = self.expect_ident();
+      let mutable = self.checks(Mut);
+      let name = self.expect_idents();
       let mut ty = None;
       // Check (: Ty)
-      self.strip();
-      if (self.check(Colon)) {
+      if (self.checks(Colon)) {
         ty = Some(self.typename());
       }
-      self.strip();
-      self.expect(Assign);
+      self.expects(Assign);
       self.strip();
       let init = self.expr();
       self.semicolon();
@@ -651,8 +789,7 @@ pub fn Parser::stmt(self: Parser) -> AST {
       return AST::new(While(cond, body, exit), from, self.loc());
     }
     For => {
-      self.strip();
-      let name = self.expect_ident();
+      let name = self.expect_idents();
       if (self.checks(In)) {
         let range = self.expr();
         let body = self.block();
@@ -663,23 +800,19 @@ pub fn Parser::stmt(self: Parser) -> AST {
         return AST::new(ForIn(name, range, body, exit), from, self.loc());
       }
       self.expects(Assign);
-      self.strip();
-      let start = self.expr();
+      let start = self.exprs();
 
       self.expects(Semicolon);
-      self.strip();
-      let cond = self.expr();
+      let cond = self.exprs();
 
       self.expects(Semicolon);
-      self.strip();
-      let name2 = self.expect_ident();
+      let name2 = self.expect_idents();
       if (name2 != name) {
         @diag.error(self.data[self.place - 1].loc, self.loc(), "mutating non-induction variable \{name2}");
       }
 
       self.expects(Assign);
-      self.strip();
-      let newval = self.expr();
+      let newval = self.exprs();
 
       let body = self.block();
 
@@ -702,7 +835,7 @@ pub fn Parser::stmt(self: Parser) -> AST {
       let old = self.place;
       // The +=, -= etc. will not be affected by newline.
       self.strip();
-      if (self.peek().is_any([PlusEq, MinusEq, StarEq, SlashEq, PercentEq, Assign])) {
+      if (self.peek().is_any([PlusEq, MinusEq, StarEq, SlashEq, PercentEq, Assign, AndEq, XorEq, OrEq])) {
         let tok = self.consume();
         let kind = match tok.ty {
           PlusEq => Add
@@ -711,10 +844,12 @@ pub fn Parser::stmt(self: Parser) -> AST {
           SlashEq => Div
           PercentEq => Mod
           Assign => Assign
+          AndEq => And
+          XorEq => Xor
+          OrEq => Or
           _ => panic()
         }
-        self.strip();
-        let rhs = self.expr();
+        let rhs = self.exprs();
         expr = AST::new(BinaryInplace(kind, expr, rhs), from, self.loc());
       } else {
         self.place = old;
@@ -733,8 +868,7 @@ pub fn Parser::block(self: Parser) -> AST {
   self.strip();
   while (not(self.check(RBrace)) && not(self.check(EOF))) {
     content.push(self.stmt());
-    self.strip();
-    if (self.check(EOF)) {
+    if (self.checks(EOF)) {
       @diag.error(from, from.advance(1), "left brace is never closed");
       break;
     }
@@ -802,16 +936,37 @@ pub fn Parser::structdecl(self: Parser, visible: Visible) -> AST {
   self.expect(LBrace);
   self.strip();
   while (not(self.check(RBrace)) && not(self.peek().isa(EOF))) {
+    // `mut` and `priv` can come at any order.
+    let mut mutable = self.checks(Mut);
+    let mut vis = Visible::Pub;
+    if (self.checks(Priv)) {
+      vis = Priv;
+    }
+    if (self.checks(Mut)) {
+      mutable = true;
+    }
+
     let name = self.expect_ident();
     self.expect(Colon);
     let ty = self.typename();
-    fields.push((name, ty));
+    fields.push({ name, ty, mutable, vis });
     if (not(self.peek().isa(RBrace))) {
       self.semicolon();
     }
     self.strip();
   }
-  return AST::new(StructDecl(visible, self.unqualified(name), fields), from, self.loc());
+  let deriving = [];
+  if (self.checks(Derive)) {
+    self.expects(LPar);
+    while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
+      let name = self.qualified_typename();
+      deriving.push(name);
+      if (not(self.peek().isa(RPar))) {
+        self.expects(Comma);
+      }
+    }
+  }
+  return AST::new(StructDecl(visible, self.unqualified(name), fields, deriving), from, self.loc());
 }
 
 pub fn Parser::enumdecl(self: Parser, visible: Visible) -> AST {
@@ -843,7 +998,94 @@ pub fn Parser::enumdecl(self: Parser, visible: Visible) -> AST {
     }
     self.strip();
   }
-  return AST::new(EnumDecl(visible, self.unqualified(name), variants), from, self.loc());
+  let deriving = [];
+  if (self.checks(Derive)) {
+    self.expects(LPar);
+    while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
+      let name = self.qualified_typename();
+      deriving.push(name);
+      if (not(self.peek().isa(RPar))) {
+        self.expects(Comma);
+      }
+    }
+  }
+  return AST::new(EnumDecl(visible, self.unqualified(name), variants, deriving), from, self.loc());
+}
+
+pub fn Parser::globaldecl(self: Parser, visible: Visible) -> AST {
+  let from = self.peek().loc;
+  let name = self.expect_idents();
+  let mut ty = None;
+  if (self.checks(Colon)) {
+    ty = Some(self.typename());
+  }
+  self.expects(Assign);
+  self.strip();
+  let init = self.expr();
+  self.semicolon();
+  let ast = AST::new(GlobalDecl(visible, self.unqualified(name), init), from, self.loc());
+  if (ty is Some(x)) {
+    ast.ty = x;
+  }
+  return ast;
+}
+
+pub fn Parser::qualified_typename(self: Parser) -> Name {
+  let mut pack = None;
+  if (self.peek().ty is Packname(x)) {
+    pack = Some(x);
+  }
+  let name = self.expect_typename();
+  let mut name = self.unqualified(name);
+  if (pack is Some(x)) {
+    name = name.pack(x);
+  }
+  name;
+}
+
+pub fn Parser::impldecl(self: Parser, visible: Visible) -> AST {
+  let from = self.peek().loc;
+
+  self.strip();
+  let _trait = self.qualified_typename();
+
+  self.expects(For);
+  self.strip();
+  let _struct = self.qualified_typename();
+
+  self.expects(With);
+  let func = self.expect_idents();
+  let args = [];
+  let argTys = [];
+
+  self.expects(LPar);
+  while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
+    let argname = self.expect_ident();
+    let mut ty = Type::Unknown;
+    if (self.checks(Colon)) {
+      ty = self.typename();
+    }
+    args.push(argname);
+    argTys.push(ty);
+
+    if (not(self.peek().isa(RPar))) {
+      self.expects(Comma);
+    }
+  }
+  
+  // Check the optional return type.
+  let mut retTy = Type::Unknown;
+  self.strip();
+  if (self.check(Arrow)) {
+    retTy = self.typename();
+  }
+
+  let body = self.block();
+  // FnDecl only records its return type;
+  // the function type can be inferred from `args`.
+  let ast = AST::new(ImplDecl(visible, _struct, _trait, func, args, body), from, self.loc());
+  ast.ty = Function(argTys, retTy);
+  return ast;
 }
 
 pub fn Parser::toplevel(self: Parser, visible: Visible) -> AST {
@@ -852,8 +1094,10 @@ pub fn Parser::toplevel(self: Parser, visible: Visible) -> AST {
     Fn => self.fndecl(visible);
     Struct => self.structdecl(visible);
     Enum => self.enumdecl(visible);
+    Let => self.globaldecl(visible);
+    Impl => self.impldecl(visible);
     EOF => AST::new(Leaf, @diag.Loc::unknown(), @diag.Loc::unknown());
-    Newline => self.toplevel(visible);
+    Newline | Semicolon => self.toplevel(visible);
     Pub | Pubopen | Puball | Priv => {
       self.retrace();
       let visible = self.visible();

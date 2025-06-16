@@ -4,7 +4,10 @@ pub struct Type {
 }
 
 fn Type::new() -> Type {
-  { x: 0, y: 0.F }
+  {
+    x: 0,
+    y: 0.F
+  }
 }
 
 fn Type::print(self: Type) -> Unit {

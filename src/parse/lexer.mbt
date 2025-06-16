@@ -240,6 +240,68 @@ pub fn Lexer::next(self: Lexer) -> Token {
       }
       Token::new(Bang, loc, 1)
     }
+    '&' => {
+      if (self.check("=")) {
+        return Token::new(AndEq, loc, 2);
+      }
+      if (self.check("&")) {
+        return Token::new(Logand, loc, 2);
+      }
+      Token::new(Bitand, loc, 1)
+    }
+    '|' => {
+      if (self.check("=")) {
+        return Token::new(OrEq, loc, 2);
+      }
+      if (self.check("|")) {
+        return Token::new(Logor, loc, 2);
+      }
+      Token::new(Bitor, loc, 1)
+    }
+    '^' => {
+      if (self.check("=")) {
+        return Token::new(XorEq, loc, 2);
+      }
+      Token::new(Xor, loc, 1)
+    }
+
+
+    '\'' => {
+      let ch = self.ch();
+      let mut tok = Token::new(Char(ch), loc, 3);
+      if (ch == '\\') {
+        tok = match self.ch() {
+          'n' => Token::new(Char('\n'), loc, 4)
+          't' => Token::new(Char('\t'), loc, 4)
+          'r' => Token::new(Char('\r'), loc, 4)
+          '0' => Token::new(Char('\u0000'), loc, 4)
+          '\\'=> Token::new(Char('\\'), loc, 4)
+          '\''=> Token::new(Char('\''), loc, 4)
+          '"' => Token::new(Char('"'), loc, 4)
+          'u' => {
+            let digits = [];
+            for i in 0..<4 {
+              let c = self.ch();
+              if (not(c is ('0'..='9' | 'a'..='f' | 'A'..='F'))) {
+                @diag.error(loc, loc.advance(i), "unexpected unicode escape sequence");
+                break;
+              }
+              digits.push(c);
+            }
+            let unicode = parse_hex(digits, loc);
+            Token::new(Char(Int::unsafe_to_char(unicode)), loc, 7);
+          }
+          _ => {
+            @diag.error(loc, loc.advance(3), "unknown escape sequence");
+            Token::new(Char(' '), loc, 4)
+          }
+        }
+      }
+      if (self.ch() != '\'') {
+        @diag.error(loc, loc.advance(3), "unterminated char literal");
+      }
+      tok;
+    }
 
     'a'..='z' | '_' => {
       let name = [c];
@@ -270,6 +332,10 @@ pub fn Lexer::next(self: Lexer) -> Token {
         "break" => Token::new(Break, loc, 5);
         "continue" => Token::new(Continue, loc, 8);
         "try" => Token::new(Try, loc, 3)
+        "priv" => Token::new(Priv, loc, 4)
+        "in" => Token::new(In, loc, 2)
+        "derive" => Token::new(Derive, loc, 6)
+        "is" => Token::new(Is, loc, 2)
         "pub" => {
           if (self.check("(all)")) {
             return Token::new(Puball, loc, 8);
@@ -402,6 +468,9 @@ pub fn Lexer::next(self: Lexer) -> Token {
       }
       if (self.check(".<")) {
         return Token::new(ExcRange, loc, 3);
+      }
+      if (self.check(".")) {
+        return Token::new(Expand, loc, 2);
       }
       
       let digits = [c];

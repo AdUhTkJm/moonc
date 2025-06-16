@@ -1,5 +1,5 @@
 fn main {
-  let argv = ["src/main/main.mbt"];
+  let argv = ["test/array.mbt"];
   let files = [];
   @ArgParser.parse([
     // Specs go here
