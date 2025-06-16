@@ -3,7 +3,8 @@ pub(all) enum TokenType {
   Ident(String)     // [a-z_][\w_\d]*
   Typename(String)  // [A-Z][\w_\d]*
   Int(Int)          // 0 ~ 2147483647
-  FP(Double)        // Floating point literals, ending with .F
+  Double(Double)    // Double literal
+  Float(Float)      // Float literal
   Str(String)       // "[^"]*"
 
   // Keywords
@@ -109,11 +110,12 @@ pub impl Show for TokenType with to_string(self) -> String {
     While => "while"
     For => "for"
     Mut => "mut"
-    Str(_) => "string literal"
-    FP(_) => "floating-point literal"
-    Int(_) => "integer literal"
-    Typename(_) => "type name"
-    Ident(_) => "identifier"
+    Str(x) => "string literal \"\{x}\""
+    Double(x) => "double literal \{x}"
+    Float(x) => "float literal \{x}"
+    Int(x) => "integer literal \{x}"
+    Typename(x) => "type name '\{x}'"
+    Ident(x) => "identifier '\{x}'"
     Unknown => "unknown"
     Newline => "newline"
   }
@@ -141,7 +143,8 @@ pub fn Token::isa(self: Token, ty: TokenType) -> Bool {
     (Ident(_), Ident(_)) => true
     (Typename(_), Typename(_)) => true
     (Int(_), Int(_)) => true
-    (FP(_), FP(_)) => true
+    (Double(_), Double(_)) => true
+    (Float(_), Float(_)) => true
     (Str(_), Str(_)) => true
     _ => false
   }

@@ -22,9 +22,24 @@ pub(all) enum Visible {
   Puball
 } derive(Eq, Hash)
 
+pub(all) struct Name {
+  pack: String?
+  namespace: String?
+  name: String
+}
+
+pub fn Name::unqualified(pack: Option[String], x: String) -> Name {
+  { pack: pack, namespace: None, name: x }
+}
+
+pub fn Name::qualified(pack: Option[String], namespace: String, x: String) -> Name {
+  { pack: pack, namespace: Some(namespace), name: x }
+}
+
 pub(all) enum ASTType {
-  FnDecl(Visible, String, Array[AST], AST)
+  FnDecl(Visible, Name, Array[String], AST)
   StructDecl(Visible, String, Array[(String, Type)])
+  StructInit(Map[String, AST])
   ParamDecl(String)
   VarDecl(String, Bool, AST)
   If(AST, AST, Option[AST])
@@ -35,6 +50,8 @@ pub(all) enum ASTType {
   Return(Option[AST])
   Int(Int)
   Call(AST, Array[AST])
+  Double(Double)
+  Float(Float)
   Leaf
 }
 
@@ -106,9 +123,27 @@ pub impl Show for Visible with output(self, writer) -> Unit {
   writer.write_string(self.to_string());
 }
 
+pub impl Show for Name with to_string(self) -> String {
+  let builder = StringBuilder::new();
+  if (self.pack is Some(pack)) {
+    builder.write_string("@\{pack}.");
+  }
+  if (self.namespace is Some(namespace)) {
+    builder.write_string("\{namespace}::");
+  }
+  builder.write_string(self.name);
+  builder.to_string()
+}
+
+pub impl Show for Name with output(self, writer) -> Unit {
+  writer.write_string(self.to_string());
+}
+
 fn dep_str(ast: ASTType, depth: Int) -> String {
   match ast {
     Int(vi) => "\{vi}"
+    Double(vd) => "\{vd}"
+    Float(vf) => "\{vf}F"
     VarRef(name) => name
     Block(arr) => {
       let builder = StringBuilder::new();
@@ -129,8 +164,8 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
     ParamDecl(name) => name
     FnDecl(visible, name, params, body) => {
       let builder = StringBuilder::new();
-      let params = params.map(fn (x) { x.kind.to_string() }).join(", ");
-      let params = @utils.ite(["main", "test", "init"].contains(name), params, "(\{params})");
+      let params = params.join(", ");
+      let params = @utils.ite(["main", "test", "init"].contains(name.name), params, "(\{params})");
       let visible = @utils.ite(visible == Priv, "", "\{visible} ")
       builder.write_string("\{visible}fn \{name}\{params} ");
       builder.write_string(dep_str(body.kind, depth));
@@ -138,13 +173,20 @@ fn dep_str(ast: ASTType, depth: Int) -> String {
     }
     StructDecl(visible, name, fields) => {
       let builder = StringBuilder::new();
-      let indent = String::make(@math.maximum(2 * depth, 0), ' ');
+      let indent = String::make(@math.maximum(2 * depth - 2, 0), ' ');
       let fields = fields.map(fn (t) { let (x, y) = t; "\{x}: \{y}" }).join("\n  \{indent}");
       let visible = @utils.ite(visible == Priv, "", "\{visible} ")
       builder.write_string("\{visible}struct \{name} {\n  \{indent}");
       builder.write_string(fields);
       builder.write_string("\n\{indent}}");
       builder.to_string();
+    }
+    StructInit(map) => {
+      let fields = map.to_array().map(fn (t) {
+        let (x, y) = t;
+        "\{x}: \{dep_str(y.kind, depth)}"
+      }).join(", ");
+      "{ \{fields} }";
     }
     If(cond, l, r) => {
       let builder = StringBuilder::new();
@@ -185,7 +227,7 @@ pub impl Show for AST with output(self, writer) -> Unit {
 
 pub fn ASTType::map(self: ASTType, f: (ASTType) -> ASTType) -> ASTType {
   match self {
-    FnDecl(visible, name, params, body) => f(FnDecl(visible, name, params.map(fn (x) { x.map(f) }), body.map(f)))
+    FnDecl(visible, name, params, body) => f(FnDecl(visible, name, params, body.map(f)))
     VarDecl(name, mutable, init) => f(VarDecl(name, mutable, init.map(f)))
     If(cond, l, r) => f(If(cond.map(f), l.map(f), r.map(fn (x) { x.map(f) })))
     Binary(kind, l, r) => f(Binary(kind, l.map(f), r.map(f)))
@@ -193,7 +235,8 @@ pub fn ASTType::map(self: ASTType, f: (ASTType) -> ASTType) -> ASTType {
     Block(body) => f(Block(body.map(fn (x) { x.map(f) })))
     Return(x) => f(Return(x.map(fn (x) { x.map(f) })))
     Call(x, args) => f(Call(x.map(f), args.map(fn (x) { x.map(f) })));
-    Int(_) | VarRef(_) | ParamDecl(_) | Leaf | StructDecl(_) => f(self)
+    StructInit(map) => f(StructInit(Map::from_array(map.to_array().map(fn (t) { (t.0, t.1.map(f)) }))))
+    Int(_) | VarRef(_) | ParamDecl(_) | Leaf | StructDecl(_) | Double(_) | Float(_) => f(self)
   }
 }
 

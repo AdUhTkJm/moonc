@@ -1,5 +1,5 @@
 fn main {
-  let argv = ["test/closure.mbt"];
+  let argv = ["test/struct.mbt"];
   let files = [];
   @ArgParser.parse([
     // Specs go here
@@ -27,7 +27,7 @@ fn main {
     return;
   }
 
-  let parser = @parse.Parser::new(tokens);
+  let parser = @parse.Parser::new(None, tokens);
   let ast = parser.parse();
   let good = @diag.report();
   if (not(good)) {

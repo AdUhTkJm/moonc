@@ -1,10 +1,11 @@
 pub struct Parser {
   mut place: Int
   data: Array[Token]
+  pack: Option[String]
 }
 
-pub fn Parser::new(tokens: Array[Token]) -> Parser {
-  return { place: 0, data: tokens }
+pub fn Parser::new(pack: Option[String], tokens: Array[Token]) -> Parser {
+  return { place: 0, data: tokens, pack: pack }
 }
 
 pub fn Parser::eof_loc(self: Parser) -> @diag.Loc {
@@ -96,6 +97,14 @@ pub fn Parser::ignore_until(self: Parser, stop: Array[TokenType]) -> Unit {
   for c = self.consume(); not(c.is_any(stop)); c = self.consume() { }
 }
 
+pub fn Parser::unqualified(self: Parser, x: String) -> Name {
+  Name::unqualified(self.pack, x);
+}
+
+pub fn Parser::qualified(self: Parser, namespace: String, x: String) -> Name {
+  Name::qualified(self.pack, namespace, x);
+}
+
 pub fn Parser::typename(self: Parser) -> Type {
   self.strip();
   if (self.check(LPar)) {
@@ -148,13 +157,37 @@ pub fn Parser::primary(self: Parser) -> AST {
   match (tok.ty) {
     Ident(name) => AST::new(VarRef(name), from, self.loc());
     Int(vi) => AST::new(Int(vi), from, self.loc());
+    Double(vd) => AST::new(Double(vd), from, self.loc());
+    Float(vf) => AST::new(Float(vf), from, self.loc());
     LPar => {
       let what = self.expr();
       self.expect(RPar);
       what;
     }
     LBrace => {
-      self.retrace();
+      let old = self.place;
+      self.strip();
+      if (self.check(Ident(""))) {
+        self.strip();
+        // A struct initializer.
+        if (self.check(Colon)) {
+          self.place = old;
+          self.strip();
+          let map = Map::new();
+          while (not(self.check(RBrace)) && not(self.peek().isa(EOF))) {
+            let ident = self.expect_ident();
+            self.expect(Colon);
+            let init = self.expr();
+            map[ident] = init;
+            if (not(self.peek().isa(RBrace))) {
+              self.expect(Comma);
+            }
+            self.strip();
+          }
+          return AST::new(StructInit(map), from, self.loc());
+        }
+      }
+      self.place = old - 1;
       self.block();
     }
     If => self.ifexpr();
@@ -331,25 +364,32 @@ pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
   self.strip();
   let from = self.peek().loc;
   let hasname = self.peek().isa(Ident(""));
+  let hastypename = self.peek().isa(Typename(""));
   // Cannot ite here when operands have side-effects.
-  let name = if (hasname) { self.expect_ident() } else { "__lambda_\{@utils.count()}" };
+  let name = if (hasname) {
+    self.unqualified(self.expect_ident())
+  } else if (hastypename) {
+    let namespace = self.expect_typename();
+    self.expect(ColonColon);
+    let name = self.expect_ident();
+    self.qualified(namespace, name);
+  } else {
+    self.unqualified("__lambda_\{@utils.count()}")
+  };
   let args = [];
+  let argTys = [];
   self.strip();
-  if (not(["main", "init", "test"].contains(name))) {
+  if (not(["main", "init", "test"].contains(name.name))) {
     self.expect(LPar);
     self.strip();
     while (not(self.check(RPar)) && not(self.peek().isa(EOF))) {
-      let argfrom = self.peek().loc;
       let argname = self.expect_ident();
-      let mut ty = None;
+      let mut ty = Type::Unknown;
       if (self.check(Colon)) {
-        ty = Some(self.typename());
+        ty = self.typename();
       }
-      let ast = AST::new(ParamDecl(argname), argfrom, self.loc());
-      if (ty is Some(x)) {
-        ast.ty = x;
-      }
-      args.push(ast);
+      args.push(argname);
+      argTys.push(ty);
 
       if (not(self.peek().isa(RPar))) {
         self.expect(Comma);
@@ -358,19 +398,17 @@ pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
     }
   }
   // Check the optional return type.
-  let mut retTy = None;
+  let mut retTy = Type::Unknown;
   self.strip();
   if (self.check(Arrow)) {
-    retTy = Some(self.typename());
+    retTy = self.typename();
   }
 
   let block = self.block();
   // FnDecl only records its return type;
   // the function type can be inferred from `args`.
   let ast = AST::new(FnDecl(visible, name, args, block), from, self.loc());
-  if (retTy is Some(x)) {
-    ast.ty = x;
-  }
+  ast.ty = Function(argTys, retTy);
   return ast;
 }
 

@@ -59,6 +59,61 @@ fn Lexer::retrace(self: Lexer) -> Unit {
   self.loc -= 1;
 }
 
+pub fn parse_hex(digits: Array[Char], from: @diag.Loc) -> Int {
+  let str = String::from_array(digits);
+  match (try? @strconv.parse_int(str, base=16)) {
+    Ok(x) => x
+    Err(_) => {
+      @diag.error(from, from.advance(digits.length()), "invalid hex-literal: \{str}");
+      0
+    }
+  }
+}
+
+pub fn parse_oct(digits: Array[Char], from: @diag.Loc) -> Int {
+  let str = String::from_array(digits);
+  match (try? @strconv.parse_int(str, base=8)) {
+    Ok(x) => x
+    Err(_) => {
+      @diag.error(from, from.advance(digits.length()), "invalid oct-literal: \{str}");
+      0
+    }
+  }
+}
+
+pub fn parse_dec(digits: Array[Char], from: @diag.Loc) -> Int {
+  let str = String::from_array(digits);
+  match (try? @strconv.parse_int(str, base=10)) {
+    Ok(x) => x
+    Err(_) => {
+      @diag.error(from, from.advance(digits.length()), "invalid int literal: \{str}");
+      0
+    }
+  }
+}
+
+pub fn parse_double(digits: Array[Char], from: @diag.Loc) -> Double {
+  let str = String::from_array(digits);
+  match (try? @strconv.parse_double(str)) {
+    Ok(x) => x;
+    Err(_) => {
+      @diag.error(from, from.advance(digits.length()), "invalid double: \{str}");
+      0
+    }
+  }
+}
+
+pub fn parse_float(digits: Array[Char], from: @diag.Loc) -> Float {
+  let str = String::from_array(digits);
+  match (try? @strconv.parse_double(str)) {
+    Ok(x) => x.to_float();
+    Err(_) => {
+      @diag.error(from, from.advance(digits.length()), "invalid float: \{str}");
+      0
+    }
+  }
+}
+
 pub fn Lexer::next(self: Lexer) -> Token {
   let loc = @diag.Loc::new(self.filename, self.loc);
   let c = self.ch();
@@ -69,7 +124,6 @@ pub fn Lexer::next(self: Lexer) -> Token {
     ')' => Token::new(RPar, loc, 1)
     ',' => Token::new(Comma, loc, 1)
     ';' => Token::new(Semicolon, loc, 1)
-    '.' => Token::new(Dot, loc, 1)
     
     '+' => {
       if (self.check("=")) {
@@ -169,22 +223,120 @@ pub fn Lexer::next(self: Lexer) -> Token {
     '\n' => { self.line += 1; Token::new(Newline, loc.advance(-1), 0) }
     ' ' | '\r' | '\t' => self.next()
     '0'..='9' => {
+      let octal = (c == '0');
       let digits = [c];
-      if (self.peek(1) == 'x') {
-        digits.push(self.ch());
+      let next = self.ch();
+
+      if (next == 'x' || next == 'X') {
+        digits.push(next);
+        for c = self.ch(); c is ('0'..='9' | 'a'..='f' | 'A'..='F'); c = self.ch() {
+          digits.push(c);
+        }
+        self.retrace();
+        let mut fp = false;
+        let next = self.peek(0);
+        if (next == '.') {
+          fp = true;
+          digits.push(self.ch());
+          for c = self.ch(); c is ('0'..='9' | 'a'..='f' | 'A'..='F'); c = self.ch() {
+            digits.push(c);
+          }
+          self.retrace();
+        }
+        // Also check for p(+|-)?\d+
+        let next = self.peek(0);
+        if (next == 'p' || next == 'P') {
+          fp = true;
+          digits.push(self.ch());
+          // Also allow '+' and '-'.
+          if (self.peek(0) is ('+' | '-')) {
+            digits.push(self.ch());
+          }
+          for c = self.ch(); c is ('0'..='9'); c = self.ch() {
+            digits.push(c);
+          }
+          self.retrace();
+        }
+        if (self.peek(0) == 'f' || self.peek(0) == 'F') {
+          self.ch() |> ignore;
+          let vf = parse_float(digits, loc);
+          return Token::new(Float(vf), loc, digits.length());
+        }
+        if (fp) {
+          let vf = parse_double(digits, loc);
+          return Token::new(Double(vf), loc, digits.length());
+        }
+        let vi = parse_hex(digits, loc);
+        return Token::new(Int(vi), loc, digits.length());
+      } else if (next is ('0'..='9' | '.' | 'e' | 'E')) {
+        if (not(next is ('.' | 'e' | 'E'))) {
+          digits.push(next);
+          for c = self.ch(); c is ('0'..='9'); c = self.ch() {
+            digits.push(c);
+          }
+        }
+
+        self.retrace();
+        let next = self.peek(0);
+        let mut fp = false;
+        // A floating point.
+        if (next == '.') {
+          fp = true;
+          digits.push(self.ch());
+          for c = self.ch(); c is ('0'..='9'); c = self.ch() {
+            digits.push(c);
+          }
+          self.retrace();
+        }
+
+        let next = self.peek(0);
+        if (next == 'e' || next == 'E') {
+          fp = true;
+          // Also allow '+' and '-'.
+          if (self.peek(0) is ('+' | '-')) {
+            digits.push(self.ch());
+          }
+          for c = self.ch(); c is ('0'..='9'); c = self.ch() {
+            digits.push(c);
+          }
+          self.retrace();
+        }
+        if (self.peek(0) == 'f' || self.peek(0) == 'F') {
+          self.ch() |> ignore;
+          let vf = parse_float(digits, loc);
+          return Token::new(Float(vf), loc, digits.length());
+        }
+        if (fp) {
+          let vf = parse_double(digits, loc);
+          return Token::new(Double(vf), loc, digits.length());
+        }
+        let vi = @utils.ite(octal, parse_oct, parse_dec)(digits, loc);
+        return Token::new(Int(vi), loc, digits.length());
+      } else {
+        // A single character.
+        self.retrace();
+        return Token::new(Int(parse_dec([c], loc)), loc, 1);
       }
-      for c = self.ch(); c is '0'..='9'; c = self.ch() {
-        digits.push(c);
-      }
-      // We're one step away.
-      self.retrace();
-      let str = String::from_array(digits);
-      match (try? @strconv.parse_int(str)) {
-        Ok(x) => Token::new(Int(x), loc, digits.length());
-        Err(_) => {
-          @diag.error(loc, loc.advance(digits.length()), "invalid int literal: \{str}");
-          Token::new(Int(0), loc, digits.length());
-        };
+    }
+    '.' => {
+      let digits = [c];
+      let next = self.peek(0);
+      if (next is '0'..='9') {
+        digits.push(next);
+        for c = self.ch(); c is ('0'..='9'); c = self.ch() {
+          digits.push(c);
+        }
+        self.retrace();
+        // Check suffix
+        if (self.peek(0) == 'f' || self.peek(0) == 'F') {
+          self.ch() |> ignore;
+          let vf = parse_float(digits, loc);
+          return Token::new(Float(vf), loc, digits.length());
+        }
+        let vf = parse_double(digits, loc);
+        return Token::new(Double(vf), loc, digits.length());
+      } else {
+        return Token::new(Dot, loc, 1);
       }
     }
     _ => {
