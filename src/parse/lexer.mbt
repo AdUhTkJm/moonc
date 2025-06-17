@@ -168,6 +168,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
     ',' => Token::new(Comma, loc, 1)
     ';' => Token::new(Semicolon, loc, 1)
     '?' => Token::new(Ques, loc, 1)
+    '~' => Token::new(Tilde, loc, 1)
     
     '+' => {
       if (self.check("=")) {
@@ -342,6 +343,8 @@ pub fn Lexer::next(self: Lexer) -> Token {
         "as" => Token::new(As, loc, 2)
         "typealias" => Token::new(Typealias, loc, 9)
         "fnalias" => Token::new(Fnalias, loc, 7)
+        "guard" => Token::new(Guard, loc, 5)
+        "raise" => Token::new(Raise, loc, 5)
         "pub" => {
           if (self.check("(all)")) {
             return Token::new(Puball, loc, 8);
@@ -354,7 +357,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
         _ => Token::new(Ident(str), loc, name.length());
       }
     }
-    'A'..='Z' | '#' | '@' => {
+    'A'..='Z' | '@' => {
       let name = [c];
       for c = self.ch(); c is ('a'..='z' | 'A' ..= 'Z' | '_' | '0'..='9'); c = self.ch() {
         name.push(c);
@@ -364,10 +367,19 @@ pub fn Lexer::next(self: Lexer) -> Token {
       let kind = match c {
         'A'..='Z' => Typename(name);
         '@' => Packname(name);
-        '#' => Attribute(name)
         _ => panic()
       }
       Token::new(kind, loc, name.length());
+    }
+    '#' => {
+      let name = [c];
+      // Note that it's different from above: it also accepts '.'
+      for c = self.ch(); c is ('a'..='z' | 'A' ..= 'Z' | '_' | '.' | '0'..='9'); c = self.ch() {
+        name.push(c);
+      }
+      self.retrace();
+      let name = String::from_array(name)
+      Token::new(Attribute(name), loc, name.length());
     }
     '\n' => { self.line += 1; Token::new(Newline, loc.advance(-1), 0) }
     ' ' | '\r' | '\t' => self.next()

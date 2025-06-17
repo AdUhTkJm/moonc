@@ -42,6 +42,8 @@ pub(all) enum TokenType {
   Typealias
   Fnalias
   As
+  Guard
+  Raise
 
   // Operators
   LBrace            // {
@@ -89,6 +91,7 @@ pub(all) enum TokenType {
   Expand            // ..
   Pipe              // |>
   Hash              // #
+  Tilde             // ~
 
   // Special
   EOF
@@ -144,6 +147,7 @@ pub impl Show for TokenType with to_string(self) -> String {
     Expand => "'..'"
     Pipe => "'|>'"
     Hash => "'#'"
+    Tilde => "'~'"
     Fn => "fn"
     Let => "let"
     Return => "return"
@@ -175,6 +179,8 @@ pub impl Show for TokenType with to_string(self) -> String {
     Typealias => "typealias"
     Fnalias => "fnalias"
     As => "as"
+    Guard => "guard"
+    Raise => "raise"
     Str(x) => "string literal \"\{x}\""
     Double(_, str) => "double literal \{str}"
     Float(x) => "float literal \{x}"

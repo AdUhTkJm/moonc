@@ -3,19 +3,19 @@ typealias @parse.(AST, StructDetail, EnumDetail, Visible);
 typealias @utils.Map;
 typealias @diag.Loc;
 
-struct LocalDetail {
+pub struct LocalDetail {
   name: String
   mutable: Bool
   ty: Type
 }
 
-struct GlobalDecl {
+pub struct GlobalDecl {
   name: Name
   ty: Type
   vis: Visible
 }
 
-struct FnDetail {
+pub struct FnDetail {
   name: Name
   params: Array[String]
   tyvars: Array[Typevar]

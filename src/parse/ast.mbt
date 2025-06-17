@@ -36,6 +36,12 @@ pub(all) struct Name {
   name: String
 } derive(Eq, Hash)
 
+pub(all) struct Attribute {
+  name: String
+  args: Array[String]
+  kwargs: Map[String, String]
+}
+
 pub(all) enum Pattern {
   IncRange(Pattern, Pattern)
   ExcRange(Pattern, Pattern)
@@ -62,6 +68,10 @@ pub fn Name::qualified(pack: Option[String], namespace: String, x: String) -> Na
 
 pub fn Name::pack(self: Name, pack: String) -> Name {
   { ..self, pack: Some(pack) }
+}
+
+pub fn Name::unpack(self: Name) -> Name {
+  { ..self, pack: None }
 }
 
 pub struct StructEntry {
@@ -96,12 +106,14 @@ pub struct GlobalDetail {
   vis: Visible
   name: Name
   init: AST
+  ty: Type
 }
 
 pub struct LocalDetail {
   name: String
   init: AST
   mutable: Bool
+  ty: Type
 }
 
 pub struct FnDetail {
@@ -109,7 +121,20 @@ pub struct FnDetail {
   name: Name
   params: Array[String]
   tyvars: Array[Typevar]
+  kwargs: Array[(String, Type)]
   body: AST
+  ty: Type
+}
+
+pub struct ImplDetail {
+  vis: Visible
+  ntrait: Name
+  nstruct: Type
+  nfunc: String
+  params: Array[String]
+  tyvars: Array[Typevar]
+  body: AST
+  ty: Type
 }
 
 pub impl Show for StructEntry with to_string(self) -> String {
@@ -142,13 +167,14 @@ pub impl Show for Typevar with output(self, writer) -> Unit {
 
 pub(all) enum ASTType {
   FnDecl(FnDetail)
-  ImplDecl(Visible, Name, Name, String, Array[String], AST)
+  ImplDecl(ImplDetail)
   StructDecl(StructDetail)
   StructInit(Map[String, AST])
   StructModif(AST, Map[String, AST])
+  StructLet(Pattern, AST, Type);
   ParamDecl(String)
   VarDecl(LocalDetail)
-  TupleDecl(Array[String], AST)
+  TupleDecl(Array[String], AST, Type)
   TupleMake(Array[AST])
   GlobalDecl(GlobalDetail)
   EnumDecl(EnumDetail)
@@ -170,12 +196,12 @@ pub(all) enum ASTType {
   Fstr(Array[AST])
   Bool(Bool)
   Arr(Array[AST])
-  Continue
+  Continue(Array[AST])
   Char(Char)
   Break(Option[AST])
   While(AST, AST, Option[AST])
-  For(String, AST, AST, AST, AST, Option[AST])
-  ForIn(String, AST, AST, Option[AST])
+  For(Array[(String, AST)], AST, Array[(String, AST)], AST, Option[AST])
+  ForIn(Array[String], AST, AST, Option[AST])
   Match(AST, Array[(Pattern, AST)])
   IncRange(AST, AST)
   ExcRange(AST, AST)
@@ -185,6 +211,7 @@ pub(all) enum ASTType {
   Typealias(Visible, Type, Type)
   Fnalias(Visible, Name, Name)
   View(AST, AST, AST)
+  Guard(AST, Option[AST])
   Unit
   Leaf
 }
@@ -201,17 +228,22 @@ pub(all) enum Type {
   Float
   Unit
   Double
+  String
   Bool
   Char
   Option(Type)
   Unknown
   Weak(Ref[Type])
+  MayError(Type, Type)
+  HasError(Type, Type)
+  Error
 }
 
 pub(all) struct AST {
   kind: ASTType
   from: @diag.Loc
   to: @diag.Loc
+  mut attr: Array[Attribute]
   mut ty: Type
 }
 
@@ -220,7 +252,8 @@ pub fn AST::new(kind: ASTType, from: @diag.Loc, to: @diag.Loc) -> AST {
     kind: kind,
     ty: Unknown,
     from: from,
-    to: to
+    to: to,
+    attr: []
   }
 }
 
@@ -335,6 +368,8 @@ pub impl Show for Type with to_string(self) -> String {
     Unit => "Unit"
     Bool => "Bool"
     Char => "Char"
+    String => "String"
+    Error => "Error"
     Named(x, []) | Struct(x, []) | Enum(x, []) => x.to_string()
     Named(x, arr) | Struct(x, arr) | Enum(x, arr) => {
       let s = arr.map(Type::to_string).join(", ")
@@ -353,6 +388,8 @@ pub impl Show for Type with to_string(self) -> String {
       "((\{s}) -> \{ret})"
     }
     Typevar(var) => "\{var}"
+    HasError(x, y) => "(\{x} raise \{y})"
+    MayError(x, y) => "(\{x}?\{y})"
   }
 }
 
@@ -408,6 +445,7 @@ fn dep_str(ast: AST, depth: Int) -> String {
     Bool(vb) => "\{vb}"
     Char(vc) => "'\{escape(String::from_array([vc]))}'"
     Unit => "()"
+    Leaf => "<leaf>"
     Fstr(vs) => "\"\{escapef(vs, depth)}\""
     Arr(arr) => {
       let s = arr.map(fn (x) { dep_str(x, depth) }).join(", ");
@@ -430,43 +468,54 @@ fn dep_str(ast: AST, depth: Int) -> String {
     }
     Unary(kind, l) => "(\{kind}\{dep_str(l, depth)})"
     VarDecl(detail) => {
-      let { name, mutable, init } = detail;
+      let { name, mutable, init, ty } = detail;
       let mutable = @utils.ite(mutable, "mut ", "");
-      "let \{mutable}\{name}: \{ast.ty} = \{dep_str(init, depth)}"
+      "let \{mutable}\{name}: \{ty} = \{dep_str(init, depth)}"
     }
-    TupleDecl(names, init) => {
+    TupleDecl(names, init, ty) => {
       let name = names.join(", ");
-      "let (\{name}): \{ast.ty} = \{dep_str(init, depth)}"
+      "let (\{name}): \{ty} = \{dep_str(init, depth)}"
+    }
+    StructLet(pattern, init, ty) => {
+      "let \{pattern}: \{ty} = \{dep_str(init, depth)}";
     }
     TupleMake(arr) => {
       let s = arr.map(fn (x) { dep_str(x, depth) }).join(", ");
       "(\{s})"
     }
     GlobalDecl(detail) => {
-      let { vis, name, init } = detail;
+      let { vis, name, init, ty } = detail;
       let visible = @utils.ite(vis == Priv, "", "\{vis} ")
-      "let \{visible}\{name}: \{ast.ty} = \{dep_str(init, depth)}";
+      "let \{visible}\{name}: \{ty} = \{dep_str(init, depth)}";
     }
     ParamDecl(name) => name
     FnDecl(detail) => {
-      let { vis, name, params, tyvars, body } = detail;
+      let { vis, name, params, tyvars, body, ty, kwargs } = detail;
       let params = if (["main", "test", "init"].contains(name.name)) {
         ""
       } else {
-        let tys = if (ast.ty is Function(tys, _)) { tys } else { [] };
+        let tys = if (ty is Function(tys, _)) { tys } else { [] };
         fn get(i) { if (i >= tys.length()) { Type::Unknown } else { tys[i] } }
         let params = params.mapi(fn (i, x) { "\{x}: \{get(i)}"}).join(", ");
-         "(\{params})";
+        let mut s = kwargs.map(fn (t) {
+          let (name, ty) = t;
+          "\{name}: \{ty}"
+        }).join(", ");
+        if (not(kwargs.is_empty()) && not(params.is_empty())) {
+          s = ", \{s}";
+        }
+         "(\{params}\{s})";
       }
-      let ret = if (ast.ty is Function(_, ret)) { "\{ret}" } else { "" };
+      let ret = if (ty is Function(_, ret)) { "\{ret}" } else { "" };
       let visible = if (vis == Priv) { "" } else { "\{vis} " };
       let tyvars = if (tyvars.is_empty()) { "" } else { let s = tyvars.map(Typevar::to_string).join(", "); "[\{s}]" };
       "\{visible}fn\{tyvars} \{name}\{params} -> \{ret} \{dep_str(body, depth)}"
     }
-    ImplDecl(visible, structname, traitname, funcname, params, body) => {
-      let params = params.join(", ");
-      let visible = @utils.ite(visible == Priv, "", "\{visible} ")
-      "\{visible}impl \{traitname} for \{structname} with \{funcname}(\{params}) \{dep_str(body, depth)}"
+    ImplDecl(detail) => {
+      let params = detail.params.join(", ");
+      let visible = @utils.ite(detail.vis == Priv, "", "\{detail.vis} ")
+      let tyvars = if (detail.tyvars.is_empty()) { "" } else { let s = detail.tyvars.map(Typevar::to_string).join(", "); "[\{s}]" };
+      "\{visible}impl\{tyvars} \{detail.ntrait} for \{detail.nstruct} with \{detail.nfunc}(\{params}) \{dep_str(detail.body, depth)}"
     }
     StructDecl(detail) => {
       let { name, entries, tyvars, deriving, vis } = detail;
@@ -520,17 +569,17 @@ fn dep_str(ast: AST, depth: Int) -> String {
         Some(ast) => "return \{dep_str(ast, depth)}"
       }
     }
-    Call(call, args, positional) => {
+    Call(call, args, kwargs) => {
       let args = args.map(fn (x) { dep_str(x, depth) }).join(", ");
-      let mut pos = positional.iter().map(fn (x) { "\{x.0}=\{dep_str(x.1, depth)}" }).collect().join(", ");
+      let mut pos = kwargs.iter().map(fn (x) { "\{x.0}=\{dep_str(x.1, depth)}" }).collect().join(", ");
       if (args.length() >= 1 && not(pos.is_empty())) {
         pos = ", \{pos}"
       }
       "\{dep_str(call, depth)}(\{args}\{pos})";
     }
-    ThisCall(this, name, args, positional) => {
+    ThisCall(this, name, args, kwargs) => {
       let args = args.map(fn (x) { dep_str(x, depth) }).join(", ");
-      let mut pos = positional.iter().map(fn (x) { "\{x.0}=\{dep_str(x.1, depth)}" }).collect().join(", ");
+      let mut pos = kwargs.iter().map(fn (x) { "\{x.0}=\{dep_str(x.1, depth)}" }).collect().join(", ");
       if (args.length() >= 1 && not(pos.is_empty())) {
         pos = ", \{pos}"
       }
@@ -546,17 +595,33 @@ fn dep_str(ast: AST, depth: Int) -> String {
       let v = val.map_or("", fn (x) { " \{dep_str(x, depth)}" });
       "break\{v}";
     }
+    Continue(arr) => {
+      let mut v = arr.map(fn (x) { "\{dep_str(x, depth)}" }).join(", ");
+      if (v.length() > 0) {
+        v = " \{v}";
+      }
+      "continue\{v}";
+    }
     While(cond, body, exit) => {
       let v = exit.map_or("", fn (x) { " else \{dep_str(x, depth)}" });
       "while \{dep_str(cond, depth)} \{dep_str(body, depth)}\{v}";
     }
-    For(name, start, stop, step, body, exit) => {
+    For(inits, stop, steps, body, exit) => {
+      let init = inits.map(fn (t) {
+        let (name, init) = t;
+        "\{name} = \{dep_str(init, depth)}"
+      }).join(", ");
+      let step = steps.map(fn (t) {
+        let (name, step) = t;
+        "\{name} = \{dep_str(step, depth)}"
+      }).join(", ");
       let v = exit.map_or("", fn (x) { " else \{dep_str(x, depth)}" });
-      "for \{name} = \{dep_str(start, depth)}; \{dep_str(stop, depth)}; \{name} = \{dep_str(step, depth)} \{dep_str(body, depth)}\{v}"
+      "for \{init}; \{dep_str(stop, depth)}; \{step} \{dep_str(body, depth)}\{v}"
     }
-    ForIn(name, range, body, exit) => {
+    ForIn(names, range, body, exit) => {
+      let names = names.join(", ");
       let v = exit.map_or("", fn (x) { " else \{dep_str(x, depth)}" });
-      "for \{name} in \{dep_str(range, depth)} \{dep_str(body, depth)}\{v}"
+      "for \{names} in \{dep_str(range, depth)} \{dep_str(body, depth)}\{v}"
     }
     IncRange(begin, end) => "\{dep_str(begin, depth)}..=\{dep_str(end, depth)}"
     ExcRange(begin, end) => "\{dep_str(begin, depth)}..<\{dep_str(end, depth)}"
@@ -584,13 +649,15 @@ fn dep_str(ast: AST, depth: Int) -> String {
       let to = if (to.kind is Int(2147483647)) { "" } else { dep_str(to, depth) }
       "\{dep_str(x, depth)}[\{from}:\{to}]"
     }
-    Continue => "continue"
-    Leaf => "<leaf>"
+    Guard(cond, other) => {
+      let other = if (other is Some(x)) { " else \{dep_str(x, depth)}"} else { "" }
+      "guard \{cond}\{other}"
+    }
   }
 }
 
 pub impl Show for ASTType with to_string(self) -> String {
-  dep_str({ kind: self, from: @diag.Loc::unknown(), to: @diag.Loc::unknown(), ty: Unknown }, 1);
+  dep_str({ kind: self, from: @diag.Loc::unknown(), to: @diag.Loc::unknown(), ty: Unknown, attr: [] }, 1);
 }
 
 pub impl Show for ASTType with output(self, writer) -> Unit {
@@ -614,28 +681,30 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
   f({ ..self, kind:
   match self.kind {
     FnDecl(detail) => FnDecl({ ..detail, body: detail.body.map(f) })
-    ImplDecl(visible, struct_, trait_, func, params, body) => ImplDecl(visible, struct_, trait_, func, params, body.map(f))
+    ImplDecl(detail) => ImplDecl({ ..detail, body: detail.body.map(f) })
     VarDecl(detail) => VarDecl({ ..detail, init: detail.init.map(f) })
-    TupleDecl(name, init) => TupleDecl(name, init.map(f))
+    TupleDecl(name, init, ty) => TupleDecl(name, init.map(f), ty)
     TupleAccess(x, v) => TupleAccess(x.map(f), v)
     TupleMake(arr) => TupleMake(arr.map(mapper))
+    StructLet(pat, ast, ty) => StructLet(pat, ast.map(f), ty)
     GlobalDecl(detail) => GlobalDecl({ ..detail, init: detail.init.map(f) })
-    If(cond, l, r) => If(cond.map(f), l.map(f), r.map(f))
+    If(cond, l, r) => If(cond.map(f), l.map(f), r.map(mapper))
     Binary(kind, l, r) => Binary(kind, l.map(f), r.map(f))
     BinaryInplace(kind, l, r) => BinaryInplace(kind, l.map(f), r.map(f))
     Unary(kind, l) => Unary(kind, l.map(f))
     Block(body) => Block(body.map(mapper))
     Return(x) => Return(x.map(f))
-    Call(x, args, positional) => Call(x.map(f), args.map(mapper), cvt(positional, f));
-    ThisCall(x, name, args, positional) => ThisCall(x.map(f), name, args.map(mapper), cvt(positional, f));
+    Call(x, args, kwargs) => Call(x.map(f), args.map(mapper), cvt(kwargs, f));
+    ThisCall(x, name, args, kwargs) => ThisCall(x.map(f), name, args.map(mapper), cvt(kwargs, f));
     FieldRef(x, name) => FieldRef(x.map(f), name)
     StructInit(map) => StructInit(cvt(map, f))
     StructModif(base, map) => StructModif(base.map(f), cvt(map, f))
     Arr(arr) => Arr(arr.map(mapper))
     Break(val) => Break(val.map(f))
-    While(cond, body, exit) => While(cond.map(f), body.map(f), exit.map(f))
-    For(name, start, stop, step, body, exit) => For(name, start.map(f), stop.map(f), step.map(f), body.map(f), exit.map(f))
-    ForIn(indvar, range, body, exit) => ForIn(indvar, range.map(f), body.map(f), exit.map(f));
+    Continue(val) => Continue(val.map(mapper))
+    While(cond, body, exit) => While(cond.map(f), body.map(f), exit.map(mapper))
+    For(inits, stop, steps, body, exit) => For(inits.map(fn (x) { (x.0, x.1.map(f)) }), stop.map(f), steps.map(fn (x) { (x.0, x.1.map(f)) }), body.map(f), exit.map(mapper))
+    ForIn(indvar, range, body, exit) => ForIn(indvar, range.map(f), body.map(f), exit.map(mapper));
     EnumConstr(name, arr) => EnumConstr(name, arr.map(mapper))
     IncRange(x, y) => IncRange(x.map(f), y.map(f))
     ExcRange(x, y) => ExcRange(x.map(f), y.map(f))
@@ -644,10 +713,11 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     Fstr(vs) => Fstr(vs.map(mapper))
     Is(x, pat) => Is(x.map(f), pat)
     View(x, from, to) => View(x.map(f), from.map(f), to.map(f))
+    Guard(cond, other) => Guard(cond.map(f), other.map(mapper));
     Int(_) | VarRef(_) | ParamDecl(_) | Leaf |
     StructDecl(_) | Double(_) | Float(_) | Str(_) |
-    Continue | EnumDecl(_) | Bool(_) | Char(_) |
-    Unit | Typealias(_) | Fnalias(_) => self.kind
+    Unit | EnumDecl(_) | Bool(_) | Char(_) |
+    Typealias(_) | Fnalias(_) => self.kind
   }
   });
 }
@@ -659,7 +729,7 @@ pub fn AST::visit(self: AST, f: (AST) -> Unit) -> Unit {
 pub fn AST::remove_leaf(self: AST) -> AST {
   self.map(fn (x) {
     match x {
-      { kind: Block(arr), .. } => { kind: Block(arr.filter(fn (x) { not(x.kind is Leaf) })), from: x.from, to: x.to, ty: x.ty }
+      { kind: Block(arr), .. } => { ..x, kind: Block(arr.filter(fn (x) { not(x.kind is Leaf) })) }
       _ => x
     }
   })
@@ -686,7 +756,11 @@ pub fn Type::map(self: Type, f: (Type) -> Type) -> Type {
     Struct(name, arr) => Struct(name, arr.map(mapper))
     Named(name, arr) => Named(name, arr.map(mapper))
     Weak(x) => Weak({ val: x.val.map(f) })
-    Unknown | Int | Double | Float | Char | Bool | Typevar(_) | Unit => self
+    HasError(x, y) => HasError(x.map(f), y.map(f))
+    MayError(x, y) => MayError(x.map(f), y.map(f))
+    Unknown | Int | Double | Float |
+    Char | Bool | Typevar(_) | Unit |
+    String | Error => self
   })
 }
 
