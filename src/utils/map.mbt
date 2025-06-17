@@ -41,3 +41,15 @@ pub fn[K: Eq + Hash, V] Map::to_array(self: Map[K, V]) -> Array[(K, V)] {
 pub fn[K: Eq + Hash, V] Map::iter(self: Map[K, V]) -> Iter[(K, V)] {
   self._.iter();
 }
+
+pub fn[K: Eq + Hash, V] Map::values(self: Map[K, V]) -> Array[V] {
+  self.to_array().map(fn (x) { x.1 })
+}
+
+pub fn[K: Eq + Hash, V] Map::contains(self: Map[K, V], k: K) -> Bool {
+  self._.contains(k);
+}
+
+pub fn[K: Eq + Hash, V] Map::clone(self: Map[K, V]) -> Map[K, V] {
+  Map::from_array(self._.to_array());
+}

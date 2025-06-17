@@ -3,6 +3,7 @@
   "import": [
     "AdUhTkJm/moonc/parse",
     "AdUhTkJm/moonc/diag",
+    "AdUhTkJm/moonc/sema",
     "moonbitlang/x/fs",
     "Yoorkin/ArgParser/"
   ]

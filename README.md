@@ -77,6 +77,12 @@ After feeding it to lexer and then parser, and printing the AST, what you get ba
 
 The outer braces are due to a `Block` node that encloses the whole file, which might need special treatment.
 
+## Type checking
+
+
+
 # Progress
 
 Currently the compiler is able to parse itself in entirety. However, some effort is still needed to fullly support parsing `moonbitlang/core/` packages.
+
+There is very limited type checking support.

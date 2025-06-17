@@ -1,6 +1,6 @@
 fn main {
   let files = [];
-  let args = @env.args()[1:].to_array();
+  let args = ["test/fib.mbt"];// @env.args()[1:].to_array();
   @ArgParser.parse([
     // Specs go here
   ], fn (x) { files.push(x) }, "", args);
@@ -37,5 +37,9 @@ fn main {
     return;
   }
 
-  println(ast);
+  let env = @sema.Env::new(ast);
+  let checked = env.check();
+  let _ = @diag.report();
+
+  println(checked);
 }

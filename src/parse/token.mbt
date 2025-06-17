@@ -8,6 +8,7 @@ pub(all) enum TokenType {
   Str(String)           // "[^"]*"
   Char(Char)            // '?'
   Packname(String)      // @[\w\d_]+
+  Attribute(String)     // #[\w\d_]+
 
   // Keywords
   Let
@@ -87,6 +88,7 @@ pub(all) enum TokenType {
   XorEq             // ^=
   Expand            // ..
   Pipe              // |>
+  Hash              // #
 
   // Special
   EOF
@@ -141,6 +143,7 @@ pub impl Show for TokenType with to_string(self) -> String {
     XorEq => "'^='"
     Expand => "'..'"
     Pipe => "'|>'"
+    Hash => "'#'"
     Fn => "fn"
     Let => "let"
     Return => "return"
@@ -180,6 +183,7 @@ pub impl Show for TokenType with to_string(self) -> String {
     Ident(x) => "identifier '\{x}'"
     Char(x) => "char '\{x}'"
     Packname(x) => "package name '\{x}'"
+    Attribute(x) => "attribute name '\{x}'"
     Unknown => "unknown"
     Newline => "newline"
   }
@@ -212,6 +216,7 @@ pub fn Token::isa(self: Token, ty: TokenType) -> Bool {
     (Str(_), Str(_)) => true
     (Char(_), Char(_)) => true
     (Packname(_), Packname(_)) => true
+    (Attribute(_), Attribute(_)) => true
     _ => false
   }
 }

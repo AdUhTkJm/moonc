@@ -1,0 +1,7 @@
+{
+  "import": [
+    "AdUhTkJm/moonc/parse",
+    "AdUhTkJm/moonc/diag",
+    "AdUhTkJm/moonc/utils"
+  ]
+}

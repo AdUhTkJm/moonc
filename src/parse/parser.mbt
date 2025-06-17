@@ -595,6 +595,14 @@ pub fn Parser::primary(self: Parser) -> AST {
           }
           return AST::new(EnumConstr(self.qualified(ty, name), exprs), from, self.loc());
         }
+        // Ty:: { ... }
+        if (self.checks(LBrace)) {
+          self.retrace();
+          let init = self.primary();
+          init.ty = Named(self.unqualified(ty), []);
+          return init;
+        }
+
         // Ty::field
         let name = self.expect_ident();
         return AST::new(VarRef(self.qualified(ty, name)), from, self.loc());
@@ -976,7 +984,7 @@ pub fn Parser::stmt(self: Parser) -> AST {
       self.expects(Assign);
       let init = self.exprs();
       self.semicolon();
-      let ast = AST::new(VarDecl(name, mutable, init), from, self.loc());
+      let ast = AST::new(VarDecl({ name, mutable, init }), from, self.loc());
       if (ty is Some(x)) {
         ast.ty = x;
       }
@@ -1109,19 +1117,26 @@ pub fn Parser::tyvar(self: Parser) -> Typevar {
   { name, extend }
 }
 
-pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
-  self.strip();
-  let from = self.peek().loc;
-  
-  let tyvars = [];
-  if (self.checks(LBracket)) {
-    while (not(self.checks(RBracket)) && not(self.peek().isa(EOF))) {
-      tyvars.push(self.tyvar());
-      if (not(self.peeks().isa(RBracket))) {
+pub fn Parser::deriving(self: Parser) -> Array[Name] {
+  let deriving = [];
+  if (self.checks(Derive)) {
+    self.expects(LPar);
+    while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
+      let name = self.qualified_typename();
+      deriving.push(name);
+      if (not(self.peek().isa(RPar))) {
         self.expects(Comma);
       }
     }
   }
+  deriving
+}
+
+pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
+  self.strip();
+  let from = self.peek().loc;
+  
+  let tyvars = self.tyvars();
 
   let hasname = self.peek().isa(Ident(""));
   let hastypename = self.peek().isa(Typename(""));
@@ -1136,7 +1151,7 @@ pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
   } else {
     self.unqualified("__lambda_\{@utils.count()}")
   };
-  let args = [];
+  let params = [];
   let argTys = [];
   self.strip();
   if (not(["main", "init", "test"].contains(name.name))) {
@@ -1148,7 +1163,7 @@ pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
       if (self.check(Colon)) {
         ty = self.typename();
       }
-      args.push(argname);
+      params.push(argname);
       argTys.push(ty);
 
       if (not(self.peek().isa(RPar))) {
@@ -1164,10 +1179,10 @@ pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
     retTy = self.typename();
   }
 
-  let block = self.block();
+  let body = self.block();
   // FnDecl only records its return type;
-  // the function type can be inferred from `args`.
-  let ast = AST::new(FnDecl(visible, name, args, tyvars, block), from, self.loc());
+  // the function type can be inferred from `params`.
+  let ast = AST::new(FnDecl({ vis: visible, name, params, tyvars, body }), from, self.loc());
   ast.ty = Function(argTys, retTy);
   return ast;
 }
@@ -1177,15 +1192,7 @@ pub fn Parser::structdecl(self: Parser, visible: Visible) -> AST {
   let from = self.peek().loc;
   let name = self.expect_typename();
 
-  let tyvars = [];
-  if (self.checks(LBracket)) {
-    while (not(self.checks(RBracket)) && not(self.peek().isa(EOF))) {
-      tyvars.push(self.tyvar());
-      if (not(self.peeks().isa(RBracket))) {
-        self.expects(Comma);
-      }
-    }
-  }
+  let tyvars = self.tyvars();
 
   let fields = [];
   self.expect(LBrace);
@@ -1210,18 +1217,14 @@ pub fn Parser::structdecl(self: Parser, visible: Visible) -> AST {
     }
     self.strip();
   }
-  let deriving = [];
-  if (self.checks(Derive)) {
-    self.expects(LPar);
-    while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
-      let name = self.qualified_typename();
-      deriving.push(name);
-      if (not(self.peek().isa(RPar))) {
-        self.expects(Comma);
-      }
-    }
-  }
-  return AST::new(StructDecl(visible, self.unqualified(name), fields, tyvars, deriving), from, self.loc());
+  let deriving = self.deriving();
+  let detail = StructDetail :: {
+    vis: visible,
+    name: self.unqualified(name),
+    entries: Map::from_array(fields.map(fn (x) { (x.name, x) })),
+    tyvars, deriving
+  };
+  return AST::new(StructDecl(detail), from, self.loc());
 }
 
 pub fn Parser::enumdecl(self: Parser, visible: Visible) -> AST {
@@ -1229,15 +1232,7 @@ pub fn Parser::enumdecl(self: Parser, visible: Visible) -> AST {
   let from = self.peek().loc;
   let name = self.expect_typename();
 
-  let tyvars = [];
-  if (self.checks(LBracket)) {
-    while (not(self.checks(RBracket)) && not(self.peek().isa(EOF))) {
-      tyvars.push(self.tyvar());
-      if (not(self.peeks().isa(RBracket))) {
-        self.expects(Comma);
-      }
-    }
-  }
+  let tyvars = self.tyvars();
 
   let variants = [];
   self.expect(LBrace);
@@ -1264,18 +1259,14 @@ pub fn Parser::enumdecl(self: Parser, visible: Visible) -> AST {
     }
     self.strip();
   }
-  let deriving = [];
-  if (self.checks(Derive)) {
-    self.expects(LPar);
-    while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
-      let name = self.qualified_typename();
-      deriving.push(name);
-      if (not(self.peek().isa(RPar))) {
-        self.expects(Comma);
-      }
-    }
-  }
-  return AST::new(EnumDecl(visible, self.unqualified(name), variants, tyvars, deriving), from, self.loc());
+  let deriving = self.deriving();
+  let detail = EnumDetail :: {
+    vis: visible,
+    name: self.unqualified(name),
+    entries: Map::from_array(variants.map(fn (x) { (x.0, { tys: x.1, named: Map::new() }) })),
+    tyvars, deriving
+  };
+  return AST::new(EnumDecl(detail), from, self.loc());
 }
 
 pub fn Parser::globaldecl(self: Parser, visible: Visible) -> AST {
@@ -1289,7 +1280,12 @@ pub fn Parser::globaldecl(self: Parser, visible: Visible) -> AST {
   self.strip();
   let init = self.expr();
   self.semicolon();
-  let ast = AST::new(GlobalDecl(visible, self.unqualified(name), init), from, self.loc());
+  let detail = GlobalDetail :: {
+    vis: visible,
+    name: self.unqualified(name),
+    init
+  };
+  let ast = AST::new(GlobalDecl(detail), from, self.loc());
   if (ty is Some(x)) {
     ast.ty = x;
   }
@@ -1386,12 +1382,7 @@ pub fn Parser::aliasty(self: Parser, visible: Visible) -> AST {
   AST::new(Typealias(visible, src, tgt), from, self.loc());
 }
 
-pub fn Parser::tydecl(self: Parser, visible: Visible) -> AST {
-  self.strip();
-  let from = self.peek().loc;
-  let name = self.expect_typename();
-  let name = self.unqualified(name);
-
+pub fn Parser::tyvars(self: Parser) -> Array[Typevar] {
   let tyvars = [];
   if (self.checks(LBracket)) {
     while (not(self.checks(RBracket)) && not(self.peek().isa(EOF))) {
@@ -1401,7 +1392,15 @@ pub fn Parser::tydecl(self: Parser, visible: Visible) -> AST {
       }
     }
   }
+  tyvars
+}
 
+pub fn Parser::tydecl(self: Parser, visible: Visible) -> AST {
+  self.strip();
+  let from = self.peek().loc;
+  let name = self.expect_typename();
+  let name = self.unqualified(name);
+  let tyvars = self.tyvars();
   let tys = [];
   if (self.checks(LPar)) {
     while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
@@ -1418,20 +1417,14 @@ pub fn Parser::tydecl(self: Parser, visible: Visible) -> AST {
     tys.push(self.typename());
     self.semicolon();
   }
-  
-  let deriving = [];
-  if (self.checks(Derive)) {
-    self.expects(LPar);
-    while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
-      let name = self.qualified_typename();
-      deriving.push(name);
-      if (not(self.peek().isa(RPar))) {
-        self.expects(Comma);
-      }
-    }
-  }
 
-  AST::new(EnumDecl(visible, name, [("__mem", tys)], tyvars, []), from, self.loc())
+  let deriving = self.deriving();
+  let detail = EnumDetail :: {
+    vis: visible,
+    entries: Map::from_array([("__mem", { tys, named: Map::new() })]),
+    name, tyvars, deriving
+  }
+  AST::new(EnumDecl(detail), from, self.loc())
 }
 
 pub fn Parser::toplevel(self: Parser, visible: Visible) -> AST {
@@ -1481,5 +1474,5 @@ pub fn Parser::parse(self: Parser) -> AST {
     return AST::new(Leaf, @diag.Loc::unknown(), @diag.Loc::unknown())
   }
   let top = self.toplevel_block();
-  return top.remove_leaf();
+  return top.tidy();
 }

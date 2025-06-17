@@ -354,21 +354,20 @@ pub fn Lexer::next(self: Lexer) -> Token {
         _ => Token::new(Ident(str), loc, name.length());
       }
     }
-    'A'..='Z' => {
+    'A'..='Z' | '#' | '@' => {
       let name = [c];
       for c = self.ch(); c is ('a'..='z' | 'A' ..= 'Z' | '_' | '0'..='9'); c = self.ch() {
         name.push(c);
       }
       self.retrace();
-      Token::new(Typename(String::from_array(name)), loc, name.length());
-    }
-    '@' => {
-      let name = [c];
-      for c = self.ch(); c is ('a'..='z' | 'A' ..= 'Z' | '_' | '0'..='9'); c = self.ch() {
-        name.push(c);
+      let name = String::from_array(name)
+      let kind = match c {
+        'A'..='Z' => Typename(name);
+        '@' => Packname(name);
+        '#' => Attribute(name)
+        _ => panic()
       }
-      self.retrace();
-      Token::new(Packname(String::from_array(name)), loc, name.length());
+      Token::new(kind, loc, name.length());
     }
     '\n' => { self.line += 1; Token::new(Newline, loc.advance(-1), 0) }
     ' ' | '\r' | '\t' => self.next()

@@ -34,7 +34,7 @@ pub(all) struct Name {
   pack: String?
   namespace: String?
   name: String
-}
+} derive(Eq, Hash)
 
 pub(all) enum Pattern {
   IncRange(Pattern, Pattern)
@@ -64,11 +64,52 @@ pub fn Name::pack(self: Name, pack: String) -> Name {
   { ..self, pack: Some(pack) }
 }
 
-pub(all) struct StructEntry {
+pub struct StructEntry {
   name: String
   ty: Type
   vis: Visible
   mutable: Bool
+}
+
+pub struct EnumEntry {
+  tys: Array[Type]
+  named: Map[String, Type]
+}
+
+pub struct StructDetail {
+  entries: Map[String, StructEntry]
+  vis: Visible
+  deriving: Array[Name]
+  tyvars: Array[Typevar]
+  name: Name
+}
+
+pub struct EnumDetail {
+  entries: Map[String, EnumEntry]
+  vis: Visible
+  deriving: Array[Name]
+  tyvars: Array[Typevar]
+  name: Name
+}
+
+pub struct GlobalDetail {
+  vis: Visible
+  name: Name
+  init: AST
+}
+
+pub struct LocalDetail {
+  name: String
+  init: AST
+  mutable: Bool
+}
+
+pub struct FnDetail {
+  vis: Visible
+  name: Name
+  params: Array[String]
+  tyvars: Array[Typevar]
+  body: AST
 }
 
 pub impl Show for StructEntry with to_string(self) -> String {
@@ -100,17 +141,17 @@ pub impl Show for Typevar with output(self, writer) -> Unit {
 }
 
 pub(all) enum ASTType {
-  FnDecl(Visible, Name, Array[String], Array[Typevar], AST) 
+  FnDecl(FnDetail)
   ImplDecl(Visible, Name, Name, String, Array[String], AST)
-  StructDecl(Visible, Name, Array[StructEntry], Array[Typevar], Array[Name])
+  StructDecl(StructDetail)
   StructInit(Map[String, AST])
   StructModif(AST, Map[String, AST])
   ParamDecl(String)
-  VarDecl(String, Bool, AST)      // bool: mutable
+  VarDecl(LocalDetail)
   TupleDecl(Array[String], AST)
   TupleMake(Array[AST])
-  GlobalDecl(Visible, Name, AST)
-  EnumDecl(Visible, Name, Array[(String, Array[Type])], Array[Typevar], Array[Name])
+  GlobalDecl(GlobalDetail)
+  EnumDecl(EnumDetail)
   EnumConstr(Name, Array[AST])
   If(AST, AST, Option[AST])
   Binary(BinaryKind, AST, AST)
@@ -150,16 +191,21 @@ pub(all) enum ASTType {
 
 pub(all) enum Type {
   Named(Name, Array[Type])
+  Struct(Name, Array[Type])
+  Enum(Name, Array[Type])
   FixedArray(Type)
   Function(Array[Type], Type)
   Tuple(Array[Type])
+  Typevar(Typevar)
   Int
   Float
   Unit
   Double
+  Bool
+  Char
   Option(Type)
   Unknown
-  Weak(Type)
+  Weak(Ref[Type])
 }
 
 pub(all) struct AST {
@@ -287,13 +333,15 @@ pub impl Show for Type with to_string(self) -> String {
     Double => "Double"
     Float => "Float"
     Unit => "Unit"
-    Named(x, []) => x.to_string()
-    Named(x, arr) => {
+    Bool => "Bool"
+    Char => "Char"
+    Named(x, []) | Struct(x, []) | Enum(x, []) => x.to_string()
+    Named(x, arr) | Struct(x, arr) | Enum(x, arr) => {
       let s = arr.map(Type::to_string).join(", ")
       "\{x}[\{s}]"
     }
     FixedArray(x) => "FixedArray[\{x}]"
-    Weak(x) => "'\{x}"
+    Weak(x) => "'weak(\{x.val})"
     Unknown => "?"
     Tuple(arr) => {
       let s = arr.map(Type::to_string).join(", ")
@@ -304,6 +352,7 @@ pub impl Show for Type with to_string(self) -> String {
       let s = args.map(Type::to_string).join(", ")
       "((\{s}) -> \{ret})"
     }
+    Typevar(var) => "\{var}"
   }
 }
 
@@ -380,53 +429,65 @@ fn dep_str(ast: AST, depth: Int) -> String {
       "\{dep_str(l, depth)} \{kind} \{dep_str(r, depth)}"
     }
     Unary(kind, l) => "(\{kind}\{dep_str(l, depth)})"
-    VarDecl(name, mutable, init) => {
+    VarDecl(detail) => {
+      let { name, mutable, init } = detail;
       let mutable = @utils.ite(mutable, "mut ", "");
-      "let \{mutable}\{name} = \{dep_str(init, depth)}"
+      "let \{mutable}\{name}: \{ast.ty} = \{dep_str(init, depth)}"
     }
     TupleDecl(names, init) => {
       let name = names.join(", ");
-      "let (\{name}) = \{dep_str(init, depth)}"
+      "let (\{name}): \{ast.ty} = \{dep_str(init, depth)}"
     }
     TupleMake(arr) => {
       let s = arr.map(fn (x) { dep_str(x, depth) }).join(", ");
       "(\{s})"
     }
-    GlobalDecl(visible, name, init) => {
-      let visible = @utils.ite(visible == Priv, "", "\{visible} ")
-      "let \{visible}\{name} = \{dep_str(init, depth)}";
+    GlobalDecl(detail) => {
+      let { vis, name, init } = detail;
+      let visible = @utils.ite(vis == Priv, "", "\{vis} ")
+      "let \{visible}\{name}: \{ast.ty} = \{dep_str(init, depth)}";
     }
     ParamDecl(name) => name
-    FnDecl(visible, name, params, tyvars, body) => {
-      let params = params.join(", ");
-      let params = @utils.ite(["main", "test", "init"].contains(name.name), params, "(\{params})");
-      let visible = if (visible == Priv) { "" } else { "\{visible} " };
+    FnDecl(detail) => {
+      let { vis, name, params, tyvars, body } = detail;
+      let params = if (["main", "test", "init"].contains(name.name)) {
+        ""
+      } else {
+        let tys = if (ast.ty is Function(tys, _)) { tys } else { [] };
+        fn get(i) { if (i >= tys.length()) { Type::Unknown } else { tys[i] } }
+        let params = params.mapi(fn (i, x) { "\{x}: \{get(i)}"}).join(", ");
+         "(\{params})";
+      }
+      let ret = if (ast.ty is Function(_, ret)) { "\{ret}" } else { "" };
+      let visible = if (vis == Priv) { "" } else { "\{vis} " };
       let tyvars = if (tyvars.is_empty()) { "" } else { let s = tyvars.map(Typevar::to_string).join(", "); "[\{s}]" };
-      "\{visible}fn\{tyvars} \{name}\{params} \{dep_str(body, depth)}"
+      "\{visible}fn\{tyvars} \{name}\{params} -> \{ret} \{dep_str(body, depth)}"
     }
     ImplDecl(visible, structname, traitname, funcname, params, body) => {
       let params = params.join(", ");
       let visible = @utils.ite(visible == Priv, "", "\{visible} ")
       "\{visible}impl \{traitname} for \{structname} with \{funcname}(\{params}) \{dep_str(body, depth)}"
     }
-    StructDecl(visible, name, fields, tyvars, deriving) => {
+    StructDecl(detail) => {
+      let { name, entries, tyvars, deriving, vis } = detail;
       let indent = String::make(@math.maximum(2 * depth - 2, 0), ' ');
-      let fields = fields.map(StructEntry::to_string).join("\n  \{indent}");
-      let visible = if (visible == Priv) { "" } else { "\{visible} " };
+      let fields = entries.values().map(StructEntry::to_string).join("\n  \{indent}");
+      let visible = if (vis == Priv) { "" } else { "\{vis} " };
       let deriving = deriving.map(Name::to_string).join(", ");
       let deriving = @utils.ite(deriving.length() == 0, "", " derive (\{deriving})");
       let tyvars = if (tyvars.is_empty()) { "" } else { let s = tyvars.map(Typevar::to_string).join(", "); "[\{s}]" };
       "\{visible}struct \{name}\{tyvars} {\n  \{indent}\{fields}\n\{indent}}\{deriving}"
     }
-    EnumDecl(visible, name, variants, tyvars, deriving) => {
+    EnumDecl(detail) => {
+      let { name, entries, tyvars, deriving, vis } = detail;
       let indent = String::make(@math.maximum(2 * depth - 2, 0), ' ');
-      let fields = variants.map(fn (t) {
+      let fields = entries.iter().map(fn (t) {
         let (x, y) = t;
-        let s = y.map(Type::to_string).join(", ");
+        let s = y.tys.map(Type::to_string).join(", ");
         let s = if (s.length() == 0) { "" } else { "(\{s})" }
         "\{x}\{s}"
       }).join("\n  \{indent}");
-      let visible = if (visible == Priv) { "" } else { "\{visible} " };
+      let visible = if (vis == Priv) { "" } else { "\{vis} " };
       let deriving = deriving.map(Name::to_string).join(", ");
       let deriving = @utils.ite(deriving.length() == 0, "", " derive (\{deriving})");
       let tyvars = if (tyvars.is_empty()) { "" } else { let s = tyvars.map(Typevar::to_string).join(", "); "[\{s}]" };
@@ -450,7 +511,7 @@ fn dep_str(ast: AST, depth: Int) -> String {
       let builder = StringBuilder::new();
       builder.write_string("if \{cond} ");
       builder.write_string(dep_str(l, depth));
-      builder.write_string(r.map_or("", fn(x) { dep_str(x, depth) }));
+      builder.write_string(r.map_or("", fn(x) { " else \{dep_str(x, depth)}" }));
       builder.to_string();
     }
     Return(ast) => {
@@ -549,38 +610,38 @@ fn[K: Eq + Hash] cvt(map: Map[K, AST], f: (AST) -> AST) -> Map[K, AST] {
 }
 
 pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
-
+  let mapper = fn (x: AST) { x.map(f) }
   f({ ..self, kind:
   match self.kind {
-    FnDecl(visible, name, params, tyvars, body) => FnDecl(visible, name, params, tyvars, body.map(f))
+    FnDecl(detail) => FnDecl({ ..detail, body: detail.body.map(f) })
     ImplDecl(visible, struct_, trait_, func, params, body) => ImplDecl(visible, struct_, trait_, func, params, body.map(f))
-    VarDecl(name, mutable, init) => VarDecl(name, mutable, init.map(f))
+    VarDecl(detail) => VarDecl({ ..detail, init: detail.init.map(f) })
     TupleDecl(name, init) => TupleDecl(name, init.map(f))
     TupleAccess(x, v) => TupleAccess(x.map(f), v)
-    TupleMake(arr) => TupleMake(arr.map(f))
-    GlobalDecl(visible, name, init) => GlobalDecl(visible, name, init.map(f))
+    TupleMake(arr) => TupleMake(arr.map(mapper))
+    GlobalDecl(detail) => GlobalDecl({ ..detail, init: detail.init.map(f) })
     If(cond, l, r) => If(cond.map(f), l.map(f), r.map(f))
     Binary(kind, l, r) => Binary(kind, l.map(f), r.map(f))
     BinaryInplace(kind, l, r) => BinaryInplace(kind, l.map(f), r.map(f))
     Unary(kind, l) => Unary(kind, l.map(f))
-    Block(body) => Block(body.map(f))
+    Block(body) => Block(body.map(mapper))
     Return(x) => Return(x.map(f))
-    Call(x, args, positional) => Call(x.map(f), args.map(f), cvt(positional, f));
-    ThisCall(x, name, args, positional) => ThisCall(x.map(f), name, args.map(f), cvt(positional, f));
+    Call(x, args, positional) => Call(x.map(f), args.map(mapper), cvt(positional, f));
+    ThisCall(x, name, args, positional) => ThisCall(x.map(f), name, args.map(mapper), cvt(positional, f));
     FieldRef(x, name) => FieldRef(x.map(f), name)
     StructInit(map) => StructInit(cvt(map, f))
     StructModif(base, map) => StructModif(base.map(f), cvt(map, f))
-    Arr(arr) => Arr(arr.map(f))
+    Arr(arr) => Arr(arr.map(mapper))
     Break(val) => Break(val.map(f))
     While(cond, body, exit) => While(cond.map(f), body.map(f), exit.map(f))
     For(name, start, stop, step, body, exit) => For(name, start.map(f), stop.map(f), step.map(f), body.map(f), exit.map(f))
     ForIn(indvar, range, body, exit) => ForIn(indvar, range.map(f), body.map(f), exit.map(f));
-    EnumConstr(name, arr) => EnumConstr(name, arr.map(f))
+    EnumConstr(name, arr) => EnumConstr(name, arr.map(mapper))
     IncRange(x, y) => IncRange(x.map(f), y.map(f))
     ExcRange(x, y) => ExcRange(x.map(f), y.map(f))
     ArrAccess(x, y) => ArrAccess(x.map(f), y.map(f))
     Match(matcher, arr) => Match(matcher.map(f), arr.map(fn (t) { (t.0, t.1.map(f)) }))
-    Fstr(vs) => Fstr(vs.map(f))
+    Fstr(vs) => Fstr(vs.map(mapper))
     Is(x, pat) => Is(x.map(f), pat)
     View(x, from, to) => View(x.map(f), from.map(f), to.map(f))
     Int(_) | VarRef(_) | ParamDecl(_) | Leaf |
@@ -591,6 +652,10 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
   });
 }
 
+pub fn AST::visit(self: AST, f: (AST) -> Unit) -> Unit {
+  self.map(fn (x) { f(x); x }) |> ignore;
+}
+
 pub fn AST::remove_leaf(self: AST) -> AST {
   self.map(fn (x) {
     match x {
@@ -598,4 +663,47 @@ pub fn AST::remove_leaf(self: AST) -> AST {
       _ => x
     }
   })
+}
+
+pub fn AST::weaken(self: AST) -> AST {
+  self.map(fn (ast) {
+    { ..ast, ty: ast.ty.weaken() }
+  });
+}
+
+pub fn AST::tidy(self: AST) -> AST {
+  self.remove_leaf().weaken();
+}
+
+pub fn Type::map(self: Type, f: (Type) -> Type) -> Type {
+  let mapper = fn (x: Type) { x.map(f) }
+  f(match self {
+    Option(x) => Option(x.map(f))
+    Tuple(arr) => Tuple(arr.map(mapper))
+    Function(args, ret) => Function(args.map(mapper), ret.map(f))
+    FixedArray(x) => FixedArray(x.map(f))
+    Enum(name, arr) => Enum(name, arr.map(mapper))
+    Struct(name, arr) => Struct(name, arr.map(mapper))
+    Named(name, arr) => Named(name, arr.map(mapper))
+    Weak(x) => Weak({ val: x.val.map(f) })
+    Unknown | Int | Double | Float | Char | Bool | Typevar(_) | Unit => self
+  })
+}
+
+pub fn Type::deweak(self: Type) -> Type {
+  self.map(fn {
+    Weak(x) => x.val;
+    c => c
+  });
+}
+
+pub fn Type::weaken(self: Type) -> Type {
+  self.map(fn {
+    Unknown => Weak(Ref::new(Unknown))
+    c => c
+  })
+}
+
+pub fn Type::weak() -> Type {
+  Weak(Ref::new(Unknown))
 }
