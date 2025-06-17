@@ -116,12 +116,18 @@ pub struct LocalDetail {
   ty: Type
 }
 
+pub struct Kwarg {
+  name: String
+  ty: Type
+  default: AST?
+}
+
 pub struct FnDetail {
   vis: Visible
   name: Name
   params: Array[String]
   tyvars: Array[Typevar]
-  kwargs: Array[(String, Type)]
+  kwargs: Array[Kwarg]
   body: AST
   ty: Type
 }
@@ -165,6 +171,85 @@ pub impl Show for Typevar with output(self, writer) -> Unit {
   writer.write_string(self.to_string());
 }
 
+///|
+/// Represents different kinds of AST (Abstract Syntax Tree) nodes in the MoonBit
+/// compiler.
+///
+/// Each variant corresponds to a specific syntactic construct in the MoonBit
+/// language, containing the necessary data to represent that construct in the
+/// AST.
+///
+/// Constructors:
+///
+/// * `FnDecl(FnDetail)`: Function declaration.
+/// * `ImplDecl(ImplDetail)`: Implementations of traits.
+/// * `StructDecl(StructDetail)`: Structure type declaration.
+/// * `StructInit(Map[String, AST])`: Structure initialization with field
+/// mappings.
+/// * `StructModif(AST, Map[String, AST])`: Structure modification using spread
+/// (or expand) syntax.
+/// * `StructLet(Pattern, AST, Type)`: Structure destructuring in let bindings,
+/// with type optionally annotated (where the usual `None` is expressed by `Unknown`;
+/// same below).
+/// * `ParamDecl(String)`: Parameter declaration with its name.
+/// * `VarDecl(LocalDetail)`: Local variable declaration.
+/// * `TupleDecl(Array[String], AST, Type)`: Tuple destructuring in let bindings,
+/// with optional type annotation.
+/// * `TupleMake(Array[AST])`: Tuple construction.
+/// * `GlobalDecl(GlobalDetail)`: Global variable declaration.
+/// * `EnumDecl(EnumDetail)`: Enumeration type declaration.
+/// * `EnumConstr(Name, Array[AST])`: Enumeration constructor call.
+/// * `If(AST, AST, Option[AST])`: Conditional expression with optional else
+/// branch.
+/// * `Binary(BinaryKind, AST, AST)`: Binary operation.
+/// * `BinaryInplace(BinaryKind, AST, AST)`: In-place binary operation (e.g.,
+/// `+=`, `*=`). Note that assignment is included here.
+/// * `Unary(UnaryKind, AST)`: Unary operation. Note `try?` and `guard` are both
+/// included here.
+/// * `Block(Array[AST])`: Block expression containing multiple statements.
+/// * `VarRef(Name)`: Variable reference.
+/// * `FieldRef(AST, String)`: Field access on an expression.
+/// * `Return(Option[AST])`: Return statement with optional return value.
+/// * `Int(Int)`: Integer literal.
+/// * `Call(AST, Array[AST], Map[String, AST])`: Function call with positional
+/// and keyword (named) arguments. These are referred to as `kwargs` throughout
+/// the code and in documentation.
+/// * `ThisCall(AST, String, Array[AST], Map[String, AST])`: Method call on an
+/// object, recording the object, function name and both positional and keyword
+/// arguments.
+/// * `Double(Double)`: Double-precision floating-point literal.
+/// * `Float(Float)`: Single-precision floating-point literal.
+/// * `Str(String)`: String literal.
+/// * `Fstr(Array[AST])`: Formatted string with embedded expressions.
+/// * `Bool(Bool)`: Boolean literal.
+/// * `Arr(Array[AST])`: Array literal.
+/// * `Continue(Array[AST])`: Continue statement with optional values for loop
+/// variables.
+/// * `Char(Char)`: Character literal.
+/// * `Break(Option[AST])`: Break statement with optional loop-yielded value.
+/// * `While(AST, AST, Option[AST])`: While loop with condition, body, and an
+/// optional else clause.
+/// * `For(Array[(String, AST)], AST, Array[(String, AST)], AST, Option[AST])`:
+/// For loop with initialization, condition, update, body, and an optional else
+/// clause.
+/// * `ForIn(Array[String], AST, AST, Option[AST])`: For-in loop with variables,
+/// iterable, body, and an optional else clause.
+/// * `Match(AST, Array[(Pattern, AST)])`: Pattern matching expression.
+/// * `IncRange(AST, AST)`: Inclusive range expression (`..=`).
+/// * `ExcRange(AST, AST)`: Exclusive range expression (`..<`).
+/// * `ArrAccess(AST, AST)`: Array/map access, recording array and index/key.
+/// * `Is(AST, Pattern)`: Pattern checking expression.
+/// * `TupleAccess(AST, Int)`: Tuple element access by index.
+/// * `Typealias(Visible, Type, Type)`: Type alias declaration.
+/// * `Fnalias(Visible, Name, Name)`: Function alias declaration.
+/// * `View(AST, AST, AST)`: Array/string view with start and end indices.
+/// * `Guard(AST, Option[AST])`: Guard expression with condition and an optional
+/// else branch.
+/// * `Test(Option[String], AST)`: Test block with an optional name.
+/// * `FFIBody(String)`: Foreign function interface body.
+/// * `Unit`: Unit value `()`.
+/// * `Leaf`: Placeholder node (typically removed during processing).
+///
 pub(all) enum ASTType {
   FnDecl(FnDetail)
   ImplDecl(ImplDetail)
@@ -212,6 +297,8 @@ pub(all) enum ASTType {
   Fnalias(Visible, Name, Name)
   View(AST, AST, AST)
   Guard(AST, Option[AST])
+  Test(Option[String], AST)
+  FFIBody(String)
   Unit
   Leaf
 }
@@ -397,6 +484,8 @@ pub impl Show for Type with output(self, writer) -> Unit {
   writer.write_string(self.to_string());
 }
 
+// We do not use the standard escape, because String::op_as_view is deprecated,
+// and it's not easy to remove the surrounding quotes.
 fn escape(s: String) -> String {
   let str = s.to_array();
   let result = [];
@@ -416,7 +505,7 @@ fn escape(s: String) -> String {
       '\\' => result.append(['\\', '\\'])
       '\'' => result.append(['\\', '\''])
       '\"' => result.append(['\\', '"'])
-      '\u0000' => result.append(['\\', 'u', '0', '0', '0', '0'])
+      '\b' => result.append(['\\', 'b'])
       c => result.push(c)
     }
   }
@@ -447,6 +536,7 @@ fn dep_str(ast: AST, depth: Int) -> String {
     Unit => "()"
     Leaf => "<leaf>"
     Fstr(vs) => "\"\{escapef(vs, depth)}\""
+    FFIBody(ffi) => "= \{ffi}"
     Arr(arr) => {
       let s = arr.map(fn (x) { dep_str(x, depth) }).join(", ");
       "[\{s}]"
@@ -491,15 +581,16 @@ fn dep_str(ast: AST, depth: Int) -> String {
     ParamDecl(name) => name
     FnDecl(detail) => {
       let { vis, name, params, tyvars, body, ty, kwargs } = detail;
-      let params = if (["main", "test", "init"].contains(name.name)) {
+      let params = if (["main", "init"].contains(name.name)) {
         ""
       } else {
         let tys = if (ty is Function(tys, _)) { tys } else { [] };
         fn get(i) { if (i >= tys.length()) { Type::Unknown } else { tys[i] } }
         let params = params.mapi(fn (i, x) { "\{x}: \{get(i)}"}).join(", ");
         let mut s = kwargs.map(fn (t) {
-          let (name, ty) = t;
-          "\{name}: \{ty}"
+          let { name, ty, default } = t;
+          let s = default.map_or("", fn (x) { " = \{dep_str(x, depth)}" })
+          "\{name}: \{ty}\{s}"
         }).join(", ");
         if (not(kwargs.is_empty()) && not(params.is_empty())) {
           s = ", \{s}";
@@ -653,6 +744,10 @@ fn dep_str(ast: AST, depth: Int) -> String {
       let other = if (other is Some(x)) { " else \{dep_str(x, depth)}"} else { "" }
       "guard \{cond}\{other}"
     }
+    Test(name, body) => {
+      let name = name.map_or("", fn (x) { " \{x}" });
+      "test\{name} \{dep_str(body, depth)}"
+    }
   }
 }
 
@@ -680,7 +775,7 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
   let mapper = fn (x: AST) { x.map(f) }
   f({ ..self, kind:
   match self.kind {
-    FnDecl(detail) => FnDecl({ ..detail, body: detail.body.map(f) })
+    FnDecl(detail) => FnDecl({ ..detail, body: detail.body.map(f), kwargs: detail.kwargs.map(fn (x) { { ..x, default: x.default.map(mapper) } }) })
     ImplDecl(detail) => ImplDecl({ ..detail, body: detail.body.map(f) })
     VarDecl(detail) => VarDecl({ ..detail, init: detail.init.map(f) })
     TupleDecl(name, init, ty) => TupleDecl(name, init.map(f), ty)
@@ -713,11 +808,12 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     Fstr(vs) => Fstr(vs.map(mapper))
     Is(x, pat) => Is(x.map(f), pat)
     View(x, from, to) => View(x.map(f), from.map(f), to.map(f))
-    Guard(cond, other) => Guard(cond.map(f), other.map(mapper));
+    Guard(cond, other) => Guard(cond.map(f), other.map(mapper))
+    Test(name, body) => Test(name, body.map(f))
     Int(_) | VarRef(_) | ParamDecl(_) | Leaf |
     StructDecl(_) | Double(_) | Float(_) | Str(_) |
     Unit | EnumDecl(_) | Bool(_) | Char(_) |
-    Typealias(_) | Fnalias(_) => self.kind
+    Typealias(_) | Fnalias(_) | FFIBody(_) => self.kind
   }
   });
 }

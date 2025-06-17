@@ -20,6 +20,7 @@ pub fn Lexer::lex(self: Lexer) -> Array[Token] {
   while (self.has_next()) {
     tokens.push(self.next());
   }
+  let tokens = merge_str(tokens);
   return tokens;
 }
 
@@ -112,6 +113,46 @@ pub fn parse_float(digits: Array[Char], from: @diag.Loc) -> Float {
       0
     }
   }
+}
+
+fn merge_str(tokens: Array[Token]) -> Array[Token] {
+  if tokens.is_empty() {
+    return tokens;
+  }
+  
+  let result = [];
+  let mut i = 0;
+  
+  while (i < tokens.length()) {
+    let current = tokens[i]
+    
+    if (current.ty is StrMergeable(content)) {
+      let mut merged = content;
+      let loc = current.loc;
+      let mut len = current.len;
+      
+      i += 1;
+      while i < tokens.length() {
+        match tokens[i].ty {
+          StrMergeable(next_content) => {
+            merged = merged + next_content;
+            len += tokens[i].len;
+            i += 1;
+          }
+          _ => break;
+        }
+      }
+      
+      result.push(Token::new(StrMergeable(merged), loc, len));
+    }
+    else {
+      result.push(current);
+      i += 1;
+    }
+  }
+  
+  // Map mergeable strings to ordinary strings.
+  result.map(fn (x) { if (x.ty is StrMergeable(w)) { { ..x, ty: Str(w) } } else { x } });
 }
 
 pub fn Lexer::read_str(self: Lexer) -> String {
@@ -282,6 +323,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
           '\\'=> Token::new(Char('\\'), loc, 4)
           '\''=> Token::new(Char('\''), loc, 4)
           '"' => Token::new(Char('"'), loc, 4)
+          'b' => Token::new(Char('\b'), loc, 4)
           'u' => {
             let digits = [];
             for i in 0..<4 {
@@ -345,6 +387,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
         "fnalias" => Token::new(Fnalias, loc, 7)
         "guard" => Token::new(Guard, loc, 5)
         "raise" => Token::new(Raise, loc, 5)
+        "test" => Token::new(Test, loc, 4)
         "pub" => {
           if (self.check("(all)")) {
             return Token::new(Puball, loc, 8);
@@ -372,6 +415,12 @@ pub fn Lexer::next(self: Lexer) -> Token {
       Token::new(kind, loc, name.length());
     }
     '#' => {
+      if (self.check("|")) {
+        let content = []
+        for c = self.ch(); not(c is '\n'); c = self.ch() { content.push(c); }
+        content.push('\n');
+        return Token::new(StrMergeable(String::from_array(content)), loc, content.length());
+      }
       let name = [c];
       // Note that it's different from above: it also accepts '.'
       for c = self.ch(); c is ('a'..='z' | 'A' ..= 'Z' | '_' | '.' | '0'..='9'); c = self.ch() {

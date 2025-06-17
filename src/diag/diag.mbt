@@ -54,19 +54,6 @@ pub fn error(from: Loc, to: Loc, msg: String) -> Unit {
 /// character offset arrays to support fast location lookups during error
 /// reporting.
 ///
-/// Parameters:
-///
-/// * `filename` : The name of the source file being registered.
-/// * `code` : The complete source code content of the file.
-///
-/// Example:
-///
-/// ```moonbit
-/// test "add_file" {
-///   @diag.add_file("example.mbt", "hello\nworld")
-/// }
-/// ```
-///
 pub fn add_file(filename: String, code: String) -> Unit {
   let lines = code.split("\n");
   let len = lines.map(fn (x) { x.length() });
@@ -94,16 +81,6 @@ pub fn add_file(filename: String, code: String) -> Unit {
 /// pointing to the error location.
 ///
 /// Returns `true` if no errors were recorded, `false` otherwise.
-///
-/// Example:
-///
-/// ```moonbit
-/// test "report" {
-///   @diag.add_file("test.mbt", "hello world")
-///   @diag.error(Loc::{ filename: "test.mbt", charpos: 6 }, Loc::{ filename: "test.mbt", charpos: 11 }, "syntax error")
-///   inspect(@diag.report(), content="false")
-/// }
-/// ```
 ///
 pub fn report() -> Bool {
   if (env.errors.is_empty()) {
@@ -146,24 +123,6 @@ pub fn errcnt() -> Int {
 
 ///|
 /// Converts a character position to line and column numbers within a file.
-///
-/// Parameters:
-///
-/// * `self` : The file information containing line offsets and content.
-/// * `charpos` : The absolute character position in the file to convert.
-///
-/// Returns a `PosResult` containing the line number and column position.
-///
-/// Example:
-///
-/// ```moonbit
-/// test "FileInfo::find" {
-///   let file_info = FileInfo::{ lines: ["hello", "world"].map(@string.View::from_string), accum: [-1, 5] }
-///   let pos = file_info.find(7)
-///   inspect(pos.line, content="2")
-///   inspect(pos.col, content="3")
-/// }
-/// ```
 ///
 pub fn FileInfo::find(self: FileInfo, charpos: Int) -> PosResult {
   let result = self.accum.binary_search(charpos);

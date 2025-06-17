@@ -6,6 +6,7 @@ pub(all) enum TokenType {
   Double(Double,String) // Double literal, along with the original string
   Float(Float)          // Float literal
   Str(String)           // "[^"]*"
+  StrMergeable(String)  // #|.*
   Char(Char)            // '?'
   Packname(String)      // @[\w\d_]+
   Attribute(String)     // #[\w\d_]+
@@ -44,6 +45,7 @@ pub(all) enum TokenType {
   As
   Guard
   Raise
+  Test
 
   // Operators
   LBrace            // {
@@ -181,7 +183,9 @@ pub impl Show for TokenType with to_string(self) -> String {
     As => "as"
     Guard => "guard"
     Raise => "raise"
+    Test => "test"
     Str(x) => "string literal \"\{x}\""
+    StrMergeable(x) => "mergeable string literal \"\{x}\""
     Double(_, str) => "double literal \{str}"
     Float(x) => "float literal \{x}"
     Int(x) => "integer literal \{x}"

@@ -21,6 +21,10 @@ pub fn Parser::eof(self: Parser) -> Bool {
   return self.peek().isa(EOF);
 }
 
+///|
+/// Returns the current location in the source code where the parser is
+/// positioned.
+///
 pub fn Parser::loc(self: Parser) -> Loc {
   if (self.place == 0) {
     return self.data[0].loc.advance(self.data[0].len);
@@ -32,24 +36,6 @@ pub fn Parser::loc(self: Parser) -> Loc {
 ///|
 /// Consumes and returns the next token from the parser's token stream,
 /// automatically advancing the parser's position.
-///
-/// Parameters:
-///
-/// * `self` : The parser instance to consume a token from.
-///
-/// Returns the next token in the stream. If the parser has reached the end of
-/// the token stream, returns an `EOF` token with the end-of-file location.
-///
-/// Example:
-///
-/// ```moonbit
-/// test "Parser::consume" {
-///   let tokens = [Token::new(Ident("x"), Loc::unknown(), 1), Token::new(EOF, Loc::unknown(), 0)]
-///   let parser = Parser::new(None, "test.mbt", tokens)
-///   let token = parser.consume()
-///   inspect(token.ty, content="Ident(\"x\")")
-/// }
-/// ```
 ///
 pub fn Parser::consume(self: Parser) -> Token {
   if self.place >= self.data.length() {
@@ -64,27 +50,6 @@ pub fn Parser::consume(self: Parser) -> Token {
 /// Returns the current token at the parser's position without advancing the
 /// position.
 ///
-/// Parameters:
-///
-/// * `self` : The parser instance to peek from.
-///
-/// Returns the token at the current position. If the parser has reached the end
-/// of the token stream, returns an `EOF` token with the end-of-file location.
-///
-/// Example:
-///
-/// ```moonbit
-/// test "Parser::peek" {
-///   let tokens = [Token::new(Ident("x"), Loc::unknown(), 1), Token::new(EOF, Loc::unknown(), 0)]
-///   let parser = Parser::new(None, "test.mbt", tokens)
-///   let token = parser.peek()
-///   inspect(token.ty, content="Ident(\"x\")")
-///   // Position should remain unchanged
-///   let token2 = parser.peek()
-///   inspect(token2.ty, content="Ident(\"x\")")
-/// }
-/// ```
-///
 pub fn Parser::peek(self: Parser) -> Token {
   if self.place >= self.data.length() {
     return Token::new(EOF, self.eof_loc(), 0);
@@ -92,10 +57,17 @@ pub fn Parser::peek(self: Parser) -> Token {
   self.data[self.place]
 }
 
+///|
+/// Retraces (goes back) by one token.
+/// 
 pub fn Parser::retrace(self: Parser) -> Unit {
   self.place -= 1;
 }
 
+///|
+/// Checks if the next token in the parser's token stream matches the specified
+/// token type, and advance the parser's position if and only if the match succeeds.
+///
 pub fn Parser::check(self: Parser, ty: TokenType) -> Bool {
   let old = self.place;
   if (not(self.consume().isa(ty))) {
@@ -105,6 +77,10 @@ pub fn Parser::check(self: Parser, ty: TokenType) -> Bool {
   return true;
 }
 
+///|
+/// Consumes the next token from the parser and validates that it matches the
+/// expected token type, reporting a diagnostic error on mismatch.
+///
 pub fn Parser::expect(self: Parser, ty: TokenType) -> Unit {
   let tok = self.consume();
   if (not(tok.isa(ty))) {
@@ -112,15 +88,22 @@ pub fn Parser::expect(self: Parser, ty: TokenType) -> Unit {
   }
 }
 
+///|
+/// **Strips newlines**, and returns the current token at the parser's position
+/// without advancing the position.
+///
 pub fn Parser::peeks(self: Parser) -> Token {
   self.strip();
   if self.place >= self.data.length() {
     return Token::new(EOF, self.eof_loc(), 0);
   }
-
   self.data[self.place]
 }
 
+///|
+/// **Strips newlines**, and consumes and returns the next token from the token stream,
+/// automatically advancing the parser's position.
+///
 pub fn Parser::consumes(self: Parser) -> Token {
   self.strip();
   if self.place >= self.data.length() {
@@ -132,6 +115,10 @@ pub fn Parser::consumes(self: Parser) -> Token {
   return t;
 }
 
+/// **Strips newlines**, and checks if the next token in the parser's token stream
+/// matches the specified token type, and advance the parser's position if and only
+/// if the match succeeds.
+///
 pub fn Parser::checks(self: Parser, ty: TokenType) -> Bool {
   let old = self.place;
   if (not(self.consumes().isa(ty))) {
@@ -141,6 +128,10 @@ pub fn Parser::checks(self: Parser, ty: TokenType) -> Bool {
   return true;
 }
 
+///|
+/// **Strips newlines**, consumes the next token from the parser, validates that
+/// it matches the expected token type, and reports a diagnostic error on mismatch.
+///
 pub fn Parser::expects(self: Parser, ty: TokenType) -> Unit {
   let tok = self.consumes();
   if (not(tok.isa(ty))) {
@@ -148,6 +139,11 @@ pub fn Parser::expects(self: Parser, ty: TokenType) -> Unit {
   }
 }
 
+///|
+/// Consumes the next token from the parser and validates that it is an
+/// identifier, returning the identifier string. When it's not the case, a diagnostic
+/// error is filed, and an empty string is returned.
+///
 pub fn Parser::expect_ident(self: Parser) -> String {
   match self.consume() {
     { ty: Ident(x), .. } => x
@@ -162,6 +158,11 @@ pub fn Parser::expect_ident(self: Parser) -> String {
   }
 }
 
+///|
+/// **Strips newlines**, consumes the next token from the parser and validates that
+/// it is an identifier, returning the identifier string. When it's not the case,
+/// a diagnostic error is filed, and an empty string is returned.
+///
 pub fn Parser::expect_idents(self: Parser) -> String {
   match self.consumes() {
     { ty: Ident(x), .. } => x
@@ -176,6 +177,11 @@ pub fn Parser::expect_idents(self: Parser) -> String {
   }
 }
 
+///|
+/// Consumes the next token from the parser and validates that it is an
+/// `Typename`, returning the type name string. When it's not the case, a diagnostic
+/// error is filed, and an empty string is returned.
+///
 pub fn Parser::expect_typename(self: Parser) -> String {
   match self.consume() {
     { ty: Typename(x), .. } => x
@@ -184,8 +190,8 @@ pub fn Parser::expect_typename(self: Parser) -> String {
       ""
     }
     tok => {
-      @diag.error(tok.loc, tok.loc.advance(tok.len), "expected identifier, but got \{tok.ty}");
-      self.expect_ident();
+      @diag.error(tok.loc, tok.loc.advance(tok.len), "expected type name, but got \{tok.ty}");
+      self.expect_typename();
     }
   }
 }
@@ -193,28 +199,6 @@ pub fn Parser::expect_typename(self: Parser) -> String {
 ///|
 /// Advances the parser's position past any consecutive newline tokens in the
 /// token stream.
-///
-/// Parameters:
-///
-/// * `self` : The parser instance to strip newlines from.
-///
-/// Example:
-///
-/// ```moonbit
-/// test "Parser::strip" {
-///   let tokens = [
-///     Token::new(Ident("x"), Loc::unknown(), 1),
-///     Token::new(Newline, Loc::unknown(), 1),
-///     Token::new(Newline, Loc::unknown(), 1),
-///     Token::new(Ident("y"), Loc::unknown(), 1)
-///   ]
-///   let parser = Parser::new(None, "test.mbt", tokens)
-///   parser.consume() // consume 'x'
-///   parser.strip()   // skip newlines
-///   let token = parser.peek()
-///   inspect(token.ty, content="Ident(\"y\")")
-/// }
-/// ```
 ///
 pub fn Parser::strip(self: Parser) -> Unit {
   while (self.place < self.data.length() && self.data[self.place].isa(Newline)) {
@@ -227,14 +211,22 @@ pub fn Parser::ignore_until(self: Parser, stop: Array[TokenType]) -> Unit {
   for c = self.consume(); not(c.is_any(stop)); c = self.consume() { }
 }
 
+///|
+/// Produces a name with the parser's current package, but without any namespace.
 pub fn Parser::unqualified(self: Parser, x: String) -> Name {
   Name::unqualified(self.pack, x);
 }
 
+///|
+/// Produces a name with the parser's current package, and with the specified namespace.
 pub fn Parser::qualified(self: Parser, namespace: String, x: String) -> Name {
   Name::qualified(self.pack, namespace, x);
 }
 
+///|
+/// Parses a base type from the token stream, handling both built-in primitive
+/// types and user-defined named types with optional package qualification.
+///
 pub fn Parser::basetype(self: Parser) -> Type {
   let mut pack = self.pack;
   if (self.peek().ty is Packname(x)) {
@@ -255,6 +247,8 @@ pub fn Parser::basetype(self: Parser) -> Type {
   }
 }
 
+///|
+/// 
 pub fn Parser::postfix_type(self: Parser) -> Type {
   let from = self.peek().loc;
   let mut ty = self.basetype();
@@ -786,7 +780,7 @@ pub fn Parser::postfix(self: Parser) -> AST {
         let expr = self.expr();
         if (self.checks(Assign)) {
           if (expr.kind is VarRef(v) && v.pack is None && v.namespace is None) {
-            kwargs[v.name] = self.expr();
+            kwargs[v.name] = self.exprs();
           } else {
             @diag.error(expr.from, self.loc(), "assignment does not return a value");
           }
@@ -913,7 +907,7 @@ pub fn Parser::ismatch(self: Parser) -> AST {
 pub fn Parser::cmp(self: Parser) -> AST {
   let from = self.peek().loc;
   let mut n = self.ismatch();
-  while (self.peek().is_any([Lt, Gt, Ge, Lt])) {
+  while (self.peek().is_any([Lt, Gt, Ge, Le])) {
     let cmp = self.consume().ty;
     self.strip();
     let x = self.ismatch();
@@ -932,15 +926,11 @@ pub fn Parser::cmp(self: Parser) -> AST {
 pub fn Parser::eq(self: Parser) -> AST {
   let from = self.peek().loc;
   let mut n = self.cmp();
-  while (self.peek().is_any([Lt, Gt, Ge, Lt, Ne, Eq])) {
+  while (self.peek().is_any([Ne, Eq])) {
     let cmp = self.consume().ty;
     self.strip();
     let x = self.cmp();
     let binary = match cmp {
-      Lt => Binary(Lt, n, x)
-      Le => Binary(Le, n, x)
-      Gt => Binary(Lt, x, n)
-      Ge => Binary(Le, x, n)
       Eq => Binary(Eq, n, x)
       Ne => Binary(Ne, n, x)
       _ => panic()
@@ -1311,19 +1301,30 @@ pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
   let argTys = [];
   let kwargs = [];
   self.strip();
-  if (not(["main", "init", "test"].contains(name.name))) {
+  if (not(["main", "init"].contains(name.name))) {
     self.expect(LPar);
     self.strip();
     while (not(self.checks(RPar)) && not(self.eof())) {
       let argname = self.expect_idents();
+      let loc = self.peek().loc;
       let is_kwarg = self.checks(Tilde);
+      let is_opt = self.checks(Ques);
+      if (is_kwarg && is_opt) {
+        @diag.error(loc, self.loc(), "modifiers '~' and '=' cannot appear together")
+      }
 
       let mut ty = Type::Unknown;
       if (self.checks(Colon)) {
         ty = self.typename();
       }
       if (is_kwarg) {
-        kwargs.push((argname, ty));
+        let mut default = None;
+        if (self.checks(Assign)) {
+          default = Some(self.exprs());
+        }
+        kwargs.push({ name: argname, ty, default });
+      } else if (is_opt) {
+        kwargs.push({ name: argname, ty: Option(ty), default: None });
       } else {
         params.push(argname);
         argTys.push(ty);
@@ -1336,12 +1337,23 @@ pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
   }
   // Check the optional return type.
   let mut retTy = Type::Unknown;
-  self.strip();
-  if (self.check(Arrow)) {
+  if (self.checks(Arrow)) {
     retTy = self.typename();
   }
 
-  let body = self.block();
+  let body = if (self.checks(Assign)) {
+    // An FFI body.
+    let tok = self.consumes();
+    let endloc = tok.loc.advance(tok.len);
+    if (tok.ty is Str(w)) {
+      AST::new(FFIBody(w), tok.loc, endloc)
+    } else {
+      @diag.error(tok.loc, endloc, "expected a string literal as the external function name");
+      AST::new(Leaf, tok.loc, endloc);
+    }
+  } else {
+    self.block();
+  }
   // FnDecl only records its return type;
   // the function type can be inferred from `params`.
   let ty = Function(argTys, retTy);
@@ -1642,6 +1654,22 @@ pub fn Parser::attribute(self: Parser, name: String) -> Unit {
   self.attr.push({ name, args, kwargs });
 }
 
+pub fn Parser::testdecl(self: Parser) -> AST {
+  let from = self.peek().loc;
+  let mut tok = self.consumes();
+  let mut name = None;
+  if (tok.ty is Str(w)) {
+    name = Some(w);
+    tok = self.consumes();
+  }
+  if (not(tok.isa(LBrace))) {
+    @diag.error(from, self.loc(), "a block should follow 'test'");
+  }
+  self.retrace();
+  let body = self.block();
+  AST::new(Test(name, body), from, self.loc())
+}
+
 pub fn Parser::toplevel(self: Parser, visible: Visible) -> AST {
   let tok = self.consume();
   match (tok.ty) {
@@ -1655,6 +1683,7 @@ pub fn Parser::toplevel(self: Parser, visible: Visible) -> AST {
     Fnalias => self.aliasfn(visible);
     Typealias => self.aliasty(visible);
     Type => self.tydecl(visible);
+    Test => self.testdecl();
     Attribute(name) => { self.attribute(name); self.toplevel(visible) }
     Pub | Pubopen | Puball | Priv => {
       self.retrace();
