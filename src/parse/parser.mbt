@@ -1,3 +1,5 @@
+typealias @utils.Map as Map;
+
 pub struct Parser {
   mut place: Int
   data: Array[Token]
@@ -57,6 +59,15 @@ pub fn Parser::expect(self: Parser, ty: TokenType) -> Unit {
   if (not(tok.isa(ty))) {
     @diag.error(tok.loc, tok.loc.advance(tok.len), "expected \{ty}, but got \{tok.ty}");
   }
+}
+
+pub fn Parser::peeks(self: Parser) -> Token {
+  self.strip();
+  if self.place >= self.data.length() {
+    return Token::new(EOF, self.eof_loc(), 0);
+  }
+
+  self.data[self.place]
 }
 
 pub fn Parser::consumes(self: Parser) -> Token {
@@ -178,14 +189,17 @@ pub fn Parser::postfix_type(self: Parser) -> Type {
 pub fn Parser::typename(self: Parser) -> Type {
   if (self.checks(LPar)) {
     let args = [];
-    while (not(self.check(RPar)) && not(self.peek().isa(EOF))) {
+    while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
       let ty = self.typename();
       args.push(ty);
       if (not(self.peek().isa(RPar))) {
-        self.expect(Comma);
+        self.expects(Comma);
       }
     }
-    if (not(self.check(Arrow))) {
+    if (not(self.checks(Arrow))) {
+      if (args.length() == 1) {
+        return args[0];
+      }
       return Tuple(args);
     }
     let ret = self.typename();
@@ -241,15 +255,62 @@ pub fn Parser::ifexpr(self: Parser) -> AST {
 
 fn Parser::base_pattern(self: Parser) -> Pattern {
   let tok = self.consumes();
+
   if (tok.isa(LPar)) {
     let pats = []
     while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
-      pats.push(self.composite_pattern());
-      if (not(self.peek().isa(RPar))) {
+      pats.push(self.pattern());
+      if (not(self.peeks().isa(RPar))) {
         self.expects(Comma);
       }
     }
+    if (pats.length() == 1) {
+      return pats[0];
+    }
     return Tuple(pats);
+  }
+
+  if (tok.isa(LBrace)) {
+    let fields = Map::new();
+    let mut expanded = false;
+    while (not(self.checks(RBrace)) && not(self.peek().isa(EOF))) {
+      if (self.checks(Expand)) {
+        expanded = true;
+      } else {
+        let name = self.expect_idents();
+        let mut binding: Pattern = Ident(name);
+        if (self.checks(Colon)) {
+          binding = self.pattern();
+        }
+        fields[name] = binding;
+      }
+
+      if (not(self.peeks().isa(RBrace))) {
+        self.expects(Comma);
+      }
+    }
+    return Struct(fields, expanded);
+  }
+
+  if (tok.isa(LBracket)) {
+    let content: Array[Pattern] = [];
+    while (not(self.checks(RBracket)) && not(self.peek().isa(EOF))) {
+      if (self.checks(Expand)) {
+        let mut name = "_";
+        if (self.peeks().isa(Ident(""))) {
+          name = self.expect_ident();
+        }
+        content.push(Expand(name));
+      } else {
+        let name = self.pattern();
+        content.push(name);
+      }
+
+      if (not(self.peeks().isa(RBracket))) {
+        self.expects(Comma);
+      }
+    }
+    return Array(content);
   }
 
   match tok.ty {
@@ -257,7 +318,7 @@ fn Parser::base_pattern(self: Parser) -> Pattern {
     Char(x) => Char(x)
     Str(x) => Str(x)
     Typename(x) => Enum(x, [])
-    Ident("_") => Default
+    Ident(x) => Ident(x)
     _ => {
       @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected match pattern");
       Unknown
@@ -273,7 +334,7 @@ pub fn Parser::composite_pattern(self: Parser) -> Pattern {
     if (pattern is Enum(x, [])) {
       let bindings = [];
       while (not(self.checks(RPar)) && not(self.peek().isa(EOF))) {
-        bindings.push(self.expect_ident());
+        bindings.push(self.pattern());
         if (not(self.peek().isa(RPar))) {
           self.expects(Comma);
         }
@@ -777,6 +838,16 @@ pub fn Parser::ismatch(self: Parser) -> AST {
   return n;
 }
 
+pub fn Parser::pipe(self: Parser) -> AST {
+  let from = self.peek().loc;
+  let mut n = self.logor();
+  while (self.check(Pipe)) {
+    let x = self.ismatch();
+    n = AST::new(Call(x, [n]), from, self.loc());
+  }
+  return n;
+}
+
 pub fn Parser::tryres(self: Parser) -> AST {
   let from = self.peek().loc;
   if (self.checks(Try)) {
@@ -784,7 +855,7 @@ pub fn Parser::tryres(self: Parser) -> AST {
     let after = self.tryres();
     return AST::new(Unary(Try, after), from, self.loc());
   }
-  return self.ismatch();
+  return self.pipe();
 }
 
 pub fn Parser::expr(self: Parser) -> AST {

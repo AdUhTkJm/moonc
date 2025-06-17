@@ -38,6 +38,9 @@ pub(all) enum TokenType {
   Try
   Derive
   Is
+  Typealias
+  Fnalias
+  As
 
   // Operators
   LBrace            // {
@@ -83,6 +86,7 @@ pub(all) enum TokenType {
   OrEq              // |=
   XorEq             // ^=
   Expand            // ..
+  Pipe              // |>
 
   // Special
   EOF
@@ -135,7 +139,8 @@ pub impl Show for TokenType with to_string(self) -> String {
     AndEq => "'&='"
     OrEq => "'|='"
     XorEq => "'^='"
-    Expand => ".."
+    Expand => "'..'"
+    Pipe => "'|>'"
     Fn => "fn"
     Let => "let"
     Return => "return"
@@ -164,6 +169,9 @@ pub impl Show for TokenType with to_string(self) -> String {
     Try => "try"
     Derive => "derive"
     Is => "is"
+    Typealias => "typealias"
+    Fnalias => "fnalias"
+    As => "as"
     Str(x) => "string literal \"\{x}\""
     Double(_, str) => "double literal \{str}"
     Float(x) => "float literal \{x}"

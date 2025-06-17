@@ -41,10 +41,13 @@ pub(all) enum Pattern {
   Char(Char)
   Int(Int)
   Str(String)
-  Enum(String, Array[String])
+  Enum(String, Array[Pattern])
   Or(Array[Pattern])
   Tuple(Array[Pattern])
-  Default
+  Struct(Map[String, Pattern], Bool) // bool: has '..'
+  Ident(String)
+  Array(Array[Pattern])  // expand_front, content, expand_back
+  Expand(String)
   Unknown
 }
 
@@ -135,7 +138,7 @@ pub(all) enum Type {
   Option(Type)
   Unknown
   Weak(Type)
-} derive (Show)
+}
 
 pub(all) struct AST {
   kind: ASTType
@@ -211,7 +214,7 @@ pub impl Show for Pattern with to_string(self) -> String {
     ExcRange(x, y) => "\{x}..<\{y}"
     Unknown => "?"
     Enum(x, arr) => {
-      let params = arr.join(", ");
+      let params = arr.map(Pattern::to_string).join(", ");
       let params = if (params.length() == 0) { "" } else { "(\{params})" }
       "\{x}\{params}"
     }
@@ -220,7 +223,18 @@ pub impl Show for Pattern with to_string(self) -> String {
       let s = arr.map(Pattern::to_string).join(", ");
       "(\{s})"
     }
-    Default => "_"
+    Ident(x) => x
+    Struct(map, default) => {
+      let empty = map.size() == 0;
+      let default = if (default) { @utils.ite(empty, "..", ", ..") } else { "" }
+      let fields = map.iter().map(fn (t) {
+        let (x, y) = t;
+        "\{x}: \{y}"
+      }).collect().join(", ");
+      "{ \{fields}\{default} }"
+    }
+    Array(content) => "[" + content.map(fn (x) { x.to_string() }).join(", ") + "]";
+    Expand(x) => ".. \{x}"
   }
 }
 
@@ -244,17 +258,84 @@ pub impl Show for Name with output(self, writer) -> Unit {
   writer.write_string(self.to_string());
 }
 
+pub impl Show for Type with to_string(self) -> String {
+  match (self) {
+    Int => "Int"
+    Double => "Double"
+    Float => "Float"
+    Unit => "Unit"
+    Named(x, []) => x.to_string()
+    Named(x, arr) => {
+      let s = arr.map(Type::to_string).join(", ")
+      "\{x}[\{s}]"
+    }
+    FixedArray(x) => "FixedArray[\{x}]"
+    Weak(x) => "'\{x}"
+    Unknown => "?"
+    Tuple(arr) => {
+      let s = arr.map(Type::to_string).join(", ")
+      "(\{s})"
+    }
+    Option(x) => "\{x}?"
+    Function(args, ret) => {
+      let s = args.map(Type::to_string).join(", ")
+      "((\{s}) -> \{ret})"
+    }
+  }
+}
+
+pub impl Show for Type with output(self, writer) -> Unit {
+  writer.write_string(self.to_string());
+}
+
+fn escape(s: String) -> String {
+  let str = s.to_array();
+  let result = [];
+  let mut pos = 0;
+  
+  let ch = fn () {
+    let c = str[pos];
+    pos += 1;
+    return c;
+  }
+
+  while (pos < s.length()) {
+    match ch() {
+      '\n' => result.append(['\\', 'n'])
+      '\t' => result.append(['\\', 't'])
+      '\r' => result.append(['\\', 'r'])
+      '\\' => result.append(['\\', '\\'])
+      '\'' => result.append(['\\', '\''])
+      '\"' => result.append(['\\', '"'])
+      c => result.push(c)
+    }
+  }
+
+  return String::from_array(result);
+}
+
+fn escapef(s: Array[AST], depth: Int) -> String {
+  let builder = StringBuilder::new();
+  for x in s {
+    match x.kind {
+      Str(vs) => builder.write_string(escape(vs))
+      _ => builder.write_string("\\{\{dep_str(x, depth)}}")
+    }
+  }
+  builder.to_string()
+}
+
 fn dep_str(ast: AST, depth: Int) -> String {
   match ast.kind {
     Int(vi) => "\{vi}"
     Double(vd) => "\{vd}"
     Float(vf) => "\{vf}F"
-    Str(vs) => "R\"(\{vs})\""
+    Str(vs) => "\"\{escape(vs)}\""
     VarRef(name) => "\{name}"
     Bool(vb) => "\{vb}"
-    Char(vc) => "'\{vc}'"
+    Char(vc) => "'\{escape(String::from_array([vc]))}'"
     Unit => "()"
-    Fstr(vs) => "F:" + vs.map(fn (x) { dep_str(x, depth) }).join(" ") + ":F"
+    Fstr(vs) => "\"\{escapef(vs, depth)}\""
     Arr(arr) => {
       let s = arr.map(fn (x) { dep_str(x, depth) }).join(", ");
       "[\{s}]"

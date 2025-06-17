@@ -7,5 +7,5 @@ fn fib(x: Int) -> Int {
 
 fn main {
   let x = 2 + 4 * (6 - 5);
-  let _ = fib(x);
+  let _ = x |> fib;
 }

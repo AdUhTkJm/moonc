@@ -44,8 +44,8 @@ fn Lexer::advance(self: Lexer, i: Int) -> Unit {
 }
 
 fn Lexer::check(self: Lexer, str: String) -> Bool {
-  let len = str.char_length();
   let arr = str.to_array();
+  let len = arr.length();
   for i in 0..<len {
     if (self.peek(i) != arr[i]) {
       return false;
@@ -256,6 +256,9 @@ pub fn Lexer::next(self: Lexer) -> Token {
       if (self.check("|")) {
         return Token::new(Logor, loc, 2);
       }
+      if (self.check(">")) {
+        return Token::new(Pipe, loc, 2);
+      }
       Token::new(Bitor, loc, 1)
     }
     '^' => {
@@ -336,6 +339,9 @@ pub fn Lexer::next(self: Lexer) -> Token {
         "in" => Token::new(In, loc, 2)
         "derive" => Token::new(Derive, loc, 6)
         "is" => Token::new(Is, loc, 2)
+        "as" => Token::new(As, loc, 2)
+        "typealias" => Token::new(Typealias, loc, 9)
+        "fnalias" => Token::new(Fnalias, loc, 7)
         "pub" => {
           if (self.check("(all)")) {
             return Token::new(Puball, loc, 8);
@@ -379,7 +385,8 @@ pub fn Lexer::next(self: Lexer) -> Token {
         self.retrace();
         let mut fp = false;
         let next = self.peek(0);
-        if (next == '.') {
+        // Guard for things like 0..=4, which would be parsed as (0.) . = 4
+        if (next == '.' && self.peek(1) != '.') {
           fp = true;
           digits.push(self.ch());
           for c = self.ch(); c is ('0'..='9' | 'a'..='f' | 'A'..='F'); c = self.ch() {
@@ -424,7 +431,8 @@ pub fn Lexer::next(self: Lexer) -> Token {
         let next = self.peek(0);
         let mut fp = false;
         // A floating point.
-        if (next == '.') {
+        // Similarly guard against ranges as 0..=4.
+        if (next == '.' && self.peek(1) != '.') {
           fp = true;
           digits.push(self.ch());
           for c = self.ch(); c is ('0'..='9'); c = self.ch() {
@@ -476,7 +484,6 @@ pub fn Lexer::next(self: Lexer) -> Token {
       let digits = [c];
       let next = self.peek(0);
       if (next is '0'..='9') {
-        digits.push(next);
         for c = self.ch(); c is ('0'..='9'); c = self.ch() {
           digits.push(c);
         }
