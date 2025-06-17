@@ -308,7 +308,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
 
     'a'..='z' | '_' => {
       let name = [c];
-      for c = self.ch(); c is ('a'..='z' | 'A' ..= 'Z' | '_'); c = self.ch() {
+      for c = self.ch(); c is ('a'..='z' | 'A' ..= 'Z' | '_' | '0'..='9'); c = self.ch() {
         name.push(c);
       }
       self.retrace();
@@ -356,7 +356,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
     }
     'A'..='Z' => {
       let name = [c];
-      for c = self.ch(); c is ('a'..='z' | 'A' ..= 'Z' | '_'); c = self.ch() {
+      for c = self.ch(); c is ('a'..='z' | 'A' ..= 'Z' | '_' | '0'..='9'); c = self.ch() {
         name.push(c);
       }
       self.retrace();
@@ -364,7 +364,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
     }
     '@' => {
       let name = [c];
-      for c = self.ch(); c is ('a'..='z' | 'A' ..= 'Z' | '_'); c = self.ch() {
+      for c = self.ch(); c is ('a'..='z' | 'A' ..= 'Z' | '_' | '0'..='9'); c = self.ch() {
         name.push(c);
       }
       self.retrace();

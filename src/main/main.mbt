@@ -1,13 +1,16 @@
 fn main {
-  let argv = ["test/fib.mbt"];
   let files = [];
+  let args = @env.args()[1:].to_array();
   @ArgParser.parse([
     // Specs go here
-  ], fn (x) { files.push(x) }, "", argv);
+  ], fn (x) { files.push(x) }, "", args);
 
   // Currently only support a single file.
-  if (files.length() != 1) {
+  if (files.length() > 1) {
     println("error: multiple files are not yet supported");
+    return;
+  } else if (files.length() == 0) {
+    println("error: no input file");
     return;
   }
 

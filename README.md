@@ -79,4 +79,4 @@ The outer braces are due to a `Block` node that encloses the whole file, which m
 
 # Progress
 
-Currently the compiler is able to parse some files of itself. There are still some amount of corner cases not covered.
+Currently the compiler is able to parse itself in entirety. However, some effort is still needed to fullly support parsing `moonbitlang/core/` packages.
