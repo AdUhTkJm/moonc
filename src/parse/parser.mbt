@@ -601,6 +601,8 @@ pub fn Parser::primary(self: Parser) -> AST {
     True => AST::new(Bool(true), from, self.loc());
     False => AST::new(Bool(false), from, self.loc());
     Char(vc) => AST::new(Char(vc), from, self.loc());
+    Byte(vb) => AST::new(Byte(vb), from, self.loc());
+    ByteStr(vs) => AST::new(ByteStr(vs), from, self.loc());
     LPar => {
       let exprs = [];
       while (not(self.checks(RPar)) && not(self.eof())) {
@@ -893,9 +895,25 @@ pub fn Parser::add(self: Parser) -> AST {
   return n;
 }
 
-pub fn Parser::ismatch(self: Parser) -> AST {
+pub fn Parser::shift(self: Parser) -> AST {
   let from = self.peek().loc;
   let mut n = self.add();
+  while (self.peek().is_any([Lsh, Rsh])) {
+    let kind: BinaryKind = match (self.consume().ty) {
+      Lsh => Lsh
+      Rsh => Rsh
+      _ => panic()
+    }
+    self.strip();
+    let x = self.add();
+    n = AST::new(Binary(kind, n, x), from, self.loc());
+  }
+  return n;
+}
+
+pub fn Parser::ismatch(self: Parser) -> AST {
+  let from = self.peek().loc;
+  let mut n = self.shift();
   while (self.check(Is)) {
     self.strip();
     let x = self.pattern();

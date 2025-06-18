@@ -10,6 +10,8 @@ pub(all) enum TokenType {
   Char(Char)            // '?'
   Packname(String)      // @[\w\d_]+
   Attribute(String)     // #[\w\d_]+
+  Byte(Byte)            // b'?'
+  ByteStr(Bytes)        // b"str"
 
   // Keywords
   Let
@@ -94,6 +96,8 @@ pub(all) enum TokenType {
   Pipe              // |>
   Hash              // #
   Tilde             // ~
+  Lsh               // <<
+  Rsh               // >>
 
   // Special
   EOF
@@ -150,6 +154,8 @@ pub impl Show for TokenType with to_string(self) -> String {
     Pipe => "'|>'"
     Hash => "'#'"
     Tilde => "'~'"
+    Lsh => "'<<'"
+    Rsh => "'>>'"
     Fn => "fn"
     Let => "let"
     Return => "return"
@@ -194,6 +200,8 @@ pub impl Show for TokenType with to_string(self) -> String {
     Char(x) => "char '\{x}'"
     Packname(x) => "package name '\{x}'"
     Attribute(x) => "attribute name '\{x}'"
+    Byte(x) => "byte literal \{x}"
+    ByteStr(x) => "byte string \{x}"
     Unknown => "unknown"
     Newline => "newline"
   }

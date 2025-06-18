@@ -14,6 +14,8 @@ pub(all) enum BinaryKind {
   Bitand
   Bitor
   Xor
+  Lsh
+  Rsh
 } derive(Eq, Hash)
 
 pub(all) enum UnaryKind {
@@ -299,6 +301,8 @@ pub(all) enum ASTType {
   Guard(AST, Option[AST])
   Test(Option[String], AST)
   FFIBody(String)
+  Byte(Byte)
+  ByteStr(Bytes)
   Unit
   Leaf
 }
@@ -361,6 +365,8 @@ pub impl Show for BinaryKind with to_string(self) -> String {
     Bitand => "&"
     Bitor => "|"
     Xor => "^"
+    Lsh => "<<"
+    Rsh => ">>"
   }
 }
 
@@ -535,6 +541,8 @@ fn dep_str(ast: AST, depth: Int) -> String {
     Char(vc) => "'\{escape(String::from_array([vc]))}'"
     Unit => "()"
     Leaf => "<leaf>"
+    Byte(vb) => "\{vb}"
+    ByteStr(vs) => "b\"\{vs}\"" // TODO: convert it into \x?? in entirety
     Fstr(vs) => "\"\{escapef(vs, depth)}\""
     FFIBody(ffi) => "= \{ffi}"
     Arr(arr) => {
@@ -813,7 +821,8 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     Int(_) | VarRef(_) | ParamDecl(_) | Leaf |
     StructDecl(_) | Double(_) | Float(_) | Str(_) |
     Unit | EnumDecl(_) | Bool(_) | Char(_) |
-    Typealias(_) | Fnalias(_) | FFIBody(_) => self.kind
+    Typealias(_) | Fnalias(_) | FFIBody(_) | Byte(_) |
+    ByteStr(_) => self.kind
   }
   });
 }

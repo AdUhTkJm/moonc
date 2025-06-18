@@ -262,11 +262,17 @@ pub fn Lexer::next(self: Lexer) -> Token {
       if (self.check("=")) {
         return Token::new(Le, loc, 2);
       }
+      if (self.check("<")) {
+        return Token::new(Lsh, loc, 2);
+      }
       Token::new(Lt, loc, 1)
     }
     '>' => {
       if (self.check("=")) {
         return Token::new(Ge, loc, 2);
+      }
+      if (self.check(">")) {
+        return Token::new(Rsh, loc, 2);
       }
       Token::new(Gt, loc, 1)
     }
@@ -337,6 +343,19 @@ pub fn Lexer::next(self: Lexer) -> Token {
             let unicode = parse_hex(digits, loc);
             Token::new(Char(Int::unsafe_to_char(unicode)), loc, 7);
           }
+          'x' => {
+            let digits = [];
+            for i in 0..<2 {
+              let c = self.ch();
+              if (not(c is ('0'..='9' | 'a'..='f' | 'A'..='F'))) {
+                @diag.error(loc, loc.advance(i), "unexpected unicode escape sequence");
+                break;
+              }
+              digits.push(c);
+            }
+            let unicode = parse_hex(digits, loc);
+            Token::new(Char(Int::unsafe_to_char(unicode)), loc, 7);
+          }
           _ => {
             @diag.error(loc, loc.advance(3), "unknown escape sequence");
             Token::new(Char(' '), loc, 4)
@@ -350,6 +369,29 @@ pub fn Lexer::next(self: Lexer) -> Token {
     }
 
     'a'..='z' | '_' => {
+      // Expect a byte-char literal: b'c'
+      if (c == 'b' && self.check("'")) {
+        self.retrace();
+        let ch = self.next();
+        guard ch.ty is Char(x);
+        let w = x.to_int();
+        if (w > 255 || w < 0) {
+          @diag.error(ch.loc, ch.loc.advance(ch.len), "invalid byte literal with value \{w}");
+        }
+        return Token::new(Byte(w.to_byte()), loc, ch.len + 1);
+      }
+
+      // Expect a byte-string: b"str"
+      if (c == 'b' && self.check("\"")) {
+        // Use UTF-8, e.g. b"我" == 0xe6 88 91
+        self.retrace();
+        let str = self.next();
+
+        // Don't worry about f-strings. They aren't handled in lexer.
+        guard str.ty is Str(x);
+        return Token::new(ByteStr(@encoding.encode(@encoding.UTF8, x)), loc, str.len + 1);
+      }
+
       let name = [c];
       for c = self.ch(); c is ('a'..='z' | 'A' ..= 'Z' | '_' | '0'..='9'); c = self.ch() {
         name.push(c);
