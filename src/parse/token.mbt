@@ -1,13 +1,17 @@
+pub(all) struct IntTy {
+  len: Int
+  signed: Bool
+} derive(Eq)
+
 pub(all) enum TokenType {
   // Literals
   Ident(String)         // [a-z_][\w_\d]*
   Typename(String)      // [A-Z][\w_\d]*
-  Int(Int)              // 0 ~ 2147483647
-  Long(Int64)           // 0 ~ 922...
+  Int(BigInt,IntTy)  // [\d]+
   Double(Double,String) // Double literal, along with the original string
   Float(Float)          // Float literal
   Str(String)           // "[^"]*"
-  RawStr(String)  // #|.*
+  RawStr(String)        // #|.*
   Char(Char)            // '?'
   Packname(String)      // @[\w\d_]+
   Attribute(String)     // #[\w\d_]+
@@ -105,7 +109,7 @@ pub(all) enum TokenType {
   EOF
   Unknown
   Newline
-} derive(Eq, Hash)
+} derive(Eq)
 
 pub impl Show for TokenType with to_string(self) -> String {
   match (self) {
@@ -197,8 +201,7 @@ pub impl Show for TokenType with to_string(self) -> String {
     RawStr(x) => "raw string literal \"\{x}\""
     Double(_, str) => "double literal \{str}"
     Float(x) => "float literal \{x}"
-    Int(x) => "integer literal \{x}"
-    Long(x) => "long integer literal \{x}"
+    Int(x, _) => "int literal \{x}"
     Typename(x) => "type name '\{x}'"
     Ident(x) => "identifier '\{x}'"
     Char(x) => "char '\{x}'"

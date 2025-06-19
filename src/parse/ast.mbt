@@ -49,7 +49,7 @@ pub(all) enum Pattern {
   IncRange(Pattern, Pattern)
   ExcRange(Pattern, Pattern)
   Char(Char)
-  Int(Int)
+  Int(BigInt, IntTy)
   Str(String)
   Enum(String, Array[Pattern])
   Or(Array[Pattern])
@@ -219,8 +219,8 @@ pub impl Show for Typevar with output(self, writer) -> Unit {
 /// * `VarRef(Name)`: Variable reference.
 /// * `FieldRef(AST, String)`: Field access on an expression.
 /// * `Return(Option[AST])`: Return statement with optional return value.
-/// * `Int(Int)`: Integer literal.
-/// * `Long(Int64)`: Long integer (64-bit integer) literal.
+/// * `Int(BigInt, IntTy)`: Integer literal, with arbitrary precision. This will
+/// be truncated according to values given in `IntTy`.
 /// * `Call(AST, Array[AST], Map[String, AST])`: Function call with positional
 /// and keyword (named) arguments. These are referred to as `kwargs` throughout
 /// the code and in documentation.
@@ -285,8 +285,7 @@ pub(all) enum ASTType {
   VarRef(Name)
   FieldRef(AST, String)
   Return(Option[AST])
-  Int(Int)
-  Long(Int64)
+  Int(BigInt, IntTy)
   Call(AST, Array[AST], Map[String, AST])
   ChainCall(AST, String, Array[AST], Map[String, AST])
   Double(Double)
@@ -416,7 +415,7 @@ pub impl Show for Visible with output(self, writer) -> Unit {
 
 pub impl Show for Pattern with to_string(self) -> String {
   match self {
-    Int(x) => "\{x}"
+    Int(x, _) => "\{x}"
     Str(x) => x
     Char(x) => "'\{x}'"
     IncRange(x, y) => "\{x}..=\{y}"
@@ -547,7 +546,7 @@ fn escapef(s: Array[AST], depth: Int) -> String {
 
 fn dep_str(ast: AST, depth: Int) -> String {
   match ast.kind {
-    Int(vi) => "\{vi}"
+    Int(vi, _) => "\{vi}"
     Double(vd) => "\{vd}"
     Float(vf) => "\{vf}F"
     Str(vs) => "\"\{escape(vs)}\""
@@ -558,7 +557,6 @@ fn dep_str(ast: AST, depth: Int) -> String {
     Leaf => "<leaf>"
     Byte(vb) => "\{vb}"
     ByteStr(vs) => "\{vs}"
-    Long(vl) => "\{vl}L"
     Fstr(vs) => "\"\{escapef(vs, depth)}\""
     FFIBody(ffi) => "= \{ffi}"
     Arr(arr) => {
@@ -764,8 +762,8 @@ fn dep_str(ast: AST, depth: Int) -> String {
       "\{visible}fnalias \{src} as \{tgt}"
     }
     View(x, from, to) => {
-      let from = if (to.kind is Int(0)) { "" } else { dep_str(from, depth) }
-      let to = if (to.kind is Int(2147483647)) { "" } else { dep_str(to, depth) }
+      let from = if (to.kind is Int(0, _)) { "" } else { dep_str(from, depth) }
+      let to = if (to.kind is Int(2147483647, _)) { "" } else { dep_str(to, depth) }
       "\{dep_str(x, depth)}[\{from}:\{to}]"
     }
     Guard(cond, other) => {
@@ -842,7 +840,7 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     StructDecl(_) | Double(_) | Float(_) | Str(_) |
     Unit | EnumDecl(_) | Bool(_) | Char(_) |
     Typealias(_) | Fnalias(_) | FFIBody(_) | Byte(_) |
-    ByteStr(_) | Long(_) => self.kind
+    ByteStr(_) => self.kind
   }
   });
 }

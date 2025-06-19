@@ -451,7 +451,7 @@ fn Parser::base_pattern(self: Parser) -> Pattern {
   }
 
   match tok.ty {
-    Int(x) => Int(x)
+    Int(x, ty) => Int(x, ty)
     Char(x) => Char(x)
     Str(x) => Str(x)
     Typename(x) => Enum(x, [])
@@ -662,8 +662,7 @@ pub fn Parser::primary(self: Parser) -> AST {
   let tok = self.consume();
   match (tok.ty) {
     Ident(name) => AST::new(VarRef(self.unqualified(name)), from, self.loc());
-    Int(vi) => AST::new(Int(vi), from, self.loc());
-    Long(vl) => AST::new(Long(vl), from, self.loc());
+    Int(vi, ty) => AST::new(Int(vi, ty), from, self.loc());
     Double(vd, _) => AST::new(Double(vd), from, self.loc());
     Float(vf) => AST::new(Float(vf), from, self.loc());
     Str(vs) => self.fstr(vs);
@@ -892,12 +891,14 @@ pub fn Parser::postfix(self: Parser) -> AST {
     }
 
     if (self.check(LBracket)) {
+      let s32 = { signed: true, len: 32 };
+
       // arr[:x?]
       if (self.checks(Colon)) {
-        let min = AST::new(Int(0), from, self.loc());
+        let min = AST::new(Int(0, s32), from, self.loc());
         // arr[:]
         let max = if (self.checks(RBracket)) {
-          AST::new(Int(2147483647), from, self.loc());
+          AST::new(Int(2147483647, s32), from, self.loc());
         } else {
           let expr = self.expr();
           self.expects(RBracket);
@@ -910,7 +911,7 @@ pub fn Parser::postfix(self: Parser) -> AST {
       let ind = self.expr();
       if (self.checks(Colon)) {
         let max = if (self.checks(RBracket)) {
-           AST::new(Int(2147483647), from, self.loc());
+           AST::new(Int(2147483647, s32), from, self.loc());
         } else {
           let expr = self.expr();
           self.expects(RBracket);
@@ -933,15 +934,20 @@ pub fn Parser::postfix(self: Parser) -> AST {
 
 pub fn Parser::prefix(self: Parser) -> AST {
   let from = self.peek().loc;
+  
   if (self.check(Minus)) {
+    self.strip();
     let n = self.prefix();
     return AST::new(Unary(Minus, n), from, self.loc());
   }
+
   if (self.check(Bang)) {
+    self.strip();
     let n = self.prefix();
     return AST::new(Unary(Not, n), from, self.loc());
   }
   if (self.check(Expand)) {
+    self.strip();
     let n = self.prefix();
     return AST::new(Unary(Expand, n), from, self.loc());
   }

@@ -71,17 +71,6 @@ pub fn parse_int(digits: Array[Char], base: Int, from: @diag.Loc) -> Int {
   }
 }
 
-pub fn parse_long(digits: Array[Char], base: Int, from: @diag.Loc) -> Int64 {
-  let str = String::from_array(digits);
-  match (try? @strconv.parse_int64(str, base=base)) {
-    Ok(x) => x
-    Err(_) => {
-      @diag.error(from, from.advance(digits.length()), "invalid long literal \{str} under base \{base}");
-      0
-    }
-  }
-}
-
 pub fn parse_double(digits: Array[Char], from: @diag.Loc) -> Double {
   let str = String::from_array(digits);
   match (try? @strconv.parse_double(str)) {
@@ -102,6 +91,24 @@ pub fn parse_float(digits: Array[Char], from: @diag.Loc) -> Float {
       0
     }
   }
+}
+
+fn parse_bigint(digits: Array[Char], base: Int) -> BigInt {
+  let x = String::from_array(digits);
+  if (base == 10) {
+    return BigInt::from_string(x);
+  }
+  if (base == 16) {
+    return BigInt::from_hex(x);
+  }
+  if (base == 8) {
+    let mut result = BigInt::from_int(0);
+    for i in digits {
+      result = result * 8 + BigInt::from_int(i.to_int() - 48)
+    }
+    return result;
+  }
+  panic();
 }
 
 fn de_escape(loc: Loc, str_: String) -> String {
@@ -543,13 +550,14 @@ pub fn Lexer::next(self: Lexer) -> Token {
     '\n' => { self.line += 1; Token::new(Newline, loc.advance(-1), 0) }
     ' ' | '\r' | '\t' => self.next()
     '0'..='9' => {
-      let octal = (c == '0');
-      let base = if (octal) { 8 } else { 10 }
+      let mut base = 10;
       let digits = [c];
       let next = self.ch();
 
-      if (octal && (next == 'x' || next == 'X')) {
-        digits.push(next);
+      if ((c == '0') && (next == 'x' || next == 'X')) {
+        base = 16;
+
+        digits.clear(); // Remove '0x'
         for c = self.ch(); c is ('0'..='9' | 'a'..='f' | 'A'..='F'); c = self.ch() {
           digits.push(c);
         }
@@ -591,16 +599,17 @@ pub fn Lexer::next(self: Lexer) -> Token {
           let vf = parse_double(digits, loc);
           return Token::new(Double(vf, String::from_array(digits)), loc, digits.length());
         }
+        // fallthrough to suffix parsing
+      } else if (next == 'o') {
+        base = 8;
 
-        // Suffix L for int64
-        if (self.peek(0) == 'l' || self.peek(0) == 'L') {
-          self.ch() |> ignore;
-          let vl = parse_long(digits, 16, loc);
-          return Token::new(Long(vl), loc, digits.length());
+        digits.clear(); // Remove '0o'
+        for c = self.ch(); c is ('0'..='7'); c = self.ch() {
+          digits.push(c);
         }
-
-        let vi = parse_int(digits, 16, loc);
-        return Token::new(Int(vi), loc, digits.length());
+        self.retrace();
+        // No floating point possible.
+        // fallthrough to suffix parsing
       } else {
         let mut fp = next is ('.' | 'e' | 'E');
 
@@ -635,7 +644,6 @@ pub fn Lexer::next(self: Lexer) -> Token {
           for c = self.ch(); c is ('0'..='9'); c = self.ch() {
             digits.push(c);
           }
-          println("after e: \{digits}");
           self.retrace();
         }
 
@@ -650,17 +658,23 @@ pub fn Lexer::next(self: Lexer) -> Token {
           let vf = parse_double(digits, loc);
           return Token::new(Double(vf, String::from_array(digits)), loc, digits.length());
         }
-        
-        // Suffix L for int64
-        if (self.peek(0) == 'l' || self.peek(0) == 'L') {
-          self.ch() |> ignore;
-          let vl = parse_long(digits, base, loc);
-          return Token::new(Long(vl), loc, digits.length());
-        }
-
-        let vi = parse_int(digits, base, loc);
-        return Token::new(Int(vi), loc, digits.length());
       }
+
+      // Suffix U for unsigned
+      let mut signed = false;
+      if (self.peek(0) == 'u' || self.peek(0) == 'U') {
+        self.ch() |> ignore;
+        signed = true;
+      }
+      
+      // Suffix L for int64
+      let mut len = 32;
+      if (self.peek(0) == 'l' || self.peek(0) == 'L') {
+        self.ch() |> ignore;
+        len = 64;
+      }
+
+      return Token::new(Int(parse_bigint(digits, base), { signed, len }), loc, digits.length());
     }
     '.' => {
       if (self.check(".=")) {

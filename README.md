@@ -79,8 +79,8 @@ The outer braces are due to a `Block` node that encloses the whole file, which m
 
 ## Type checking
 
-Type checking support is currently very limited. This will be worked on as soon as everything in core/builtin is parsed successfully, as it is crucial to generate the `.mbti` files required.
+Type checking support is currently very limited. Now everything in core/builtin is parsed successfully, but it remains to generate and parse `.mbti` files required for typing.
 
 # Progress
 
-Currently the compiler is able to parse itself in entirety. According to CI, however, there are still some edge cases not handled to fully parse `moonbitlang/core/builtin`. These are actively being worked on.
+Currently the compiler is able to parse itself in entirety, and it can also parse everything in `core/builtin`.

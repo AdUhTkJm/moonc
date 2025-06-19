@@ -1,11 +1,14 @@
 import subprocess
 import sys
+import os
 from pathlib import Path
+
+home = Path.home()
 
 def check_file(file_path):
   print(f"checking {file_path}")
   result = subprocess.run(
-    ["moon", "run", "src/test", str(file_path)],
+    [f"{home}/.moon/bin/moon", "run", "src/test", str(file_path)],
     stdout=subprocess.PIPE,
     stderr=subprocess.STDOUT,
     text=True

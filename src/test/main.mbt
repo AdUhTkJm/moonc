@@ -29,7 +29,8 @@ fn parse(file: String, content: String) -> Unit {
 
 fn main {
   let files = [];
-  let args = @env.args()[1:].to_array();
+  // let args = @env.args()[1:].to_array();
+  let args = ["/home/aduhtkjm/moonbit/moonc/corelib/int64_js.mbt"];
   @ArgParser.parse([
     // Specs go here
   ], fn (x) { files.push(x) }, "", args);
