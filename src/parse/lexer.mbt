@@ -60,34 +60,23 @@ fn Lexer::retrace(self: Lexer) -> Unit {
   self.loc -= 1;
 }
 
-pub fn parse_hex(digits: Array[Char], from: @diag.Loc) -> Int {
+pub fn parse_int(digits: Array[Char], base: Int, from: @diag.Loc) -> Int {
   let str = String::from_array(digits);
-  match (try? @strconv.parse_int(str, base=16)) {
+  match (try? @strconv.parse_int(str, base=base)) {
     Ok(x) => x
     Err(_) => {
-      @diag.error(from, from.advance(digits.length()), "invalid hex-literal: \{str}");
+      @diag.error(from, from.advance(digits.length()), "invalid int literal \{str} under base \{base}");
       0
     }
   }
 }
 
-pub fn parse_oct(digits: Array[Char], from: @diag.Loc) -> Int {
+pub fn parse_long(digits: Array[Char], base: Int, from: @diag.Loc) -> Int64 {
   let str = String::from_array(digits);
-  match (try? @strconv.parse_int(str, base=8)) {
+  match (try? @strconv.parse_int64(str, base=base)) {
     Ok(x) => x
     Err(_) => {
-      @diag.error(from, from.advance(digits.length()), "invalid oct-literal: \{str}");
-      0
-    }
-  }
-}
-
-pub fn parse_dec(digits: Array[Char], from: @diag.Loc) -> Int {
-  let str = String::from_array(digits);
-  match (try? @strconv.parse_int(str, base=10)) {
-    Ok(x) => x
-    Err(_) => {
-      @diag.error(from, from.advance(digits.length()), "invalid int literal: \{str}");
+      @diag.error(from, from.advance(digits.length()), "invalid long literal \{str} under base \{base}");
       0
     }
   }
@@ -146,7 +135,7 @@ fn de_escape(loc: Loc, str_: String) -> String {
           for c = ch(); c != '}'; c = ch() {
             digits.push(c);
           }
-          let unicode = parse_hex(digits, loc);
+          let unicode = parse_int(digits, 16, loc);
           current.push(Int::unsafe_to_char(unicode));
         } else {
           for i in 0..<4 {
@@ -157,7 +146,7 @@ fn de_escape(loc: Loc, str_: String) -> String {
             }
             digits.push(c);
           }
-          let unicode = parse_hex(digits, loc);
+          let unicode = parse_int(digits, 16, loc);
           current.push(Int::unsafe_to_char(unicode));
         }
       }
@@ -171,7 +160,7 @@ fn de_escape(loc: Loc, str_: String) -> String {
           }
           digits.push(c);
         }
-        let unicode = parse_hex(digits, loc);
+        let unicode = parse_int(digits, 16, loc);
         current.push(Int::unsafe_to_char(unicode));
       }
       _ => {
@@ -196,7 +185,7 @@ fn merge_str(tokens: Array[Token]) -> Array[Token] {
   while (i < tokens.length()) {
     let current = tokens[i]
     
-    if (current.ty is StrMergeable(content)) {
+    if (current.ty is RawStr(content)) {
       let mut merged = content;
       let loc = current.loc;
       let mut len = current.len;
@@ -204,7 +193,7 @@ fn merge_str(tokens: Array[Token]) -> Array[Token] {
       i += 1;
       while i < tokens.length() {
         match tokens[i].ty {
-          StrMergeable(next_content) => {
+          RawStr(next_content) => {
             merged = merged + next_content;
             len += tokens[i].len;
             i += 1;
@@ -213,7 +202,7 @@ fn merge_str(tokens: Array[Token]) -> Array[Token] {
         }
       }
       
-      result.push(Token::new(StrMergeable(merged), loc, len));
+      result.push(Token::new(RawStr(merged), loc, len));
     }
     else {
       result.push(current);
@@ -221,8 +210,7 @@ fn merge_str(tokens: Array[Token]) -> Array[Token] {
     }
   }
   
-  // Map mergeable strings to ordinary strings.
-  result.map(fn (x) { if (x.ty is StrMergeable(w)) { { ..x, ty: Str(w) } } else { x } });
+  result
 }
 
 pub fn Lexer::read_str(self: Lexer) -> String {
@@ -406,7 +394,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
               for c = self.ch(); c != '}'; c = self.ch() {
                 digits.push(c);
               }
-              let unicode = parse_hex(digits, loc);
+              let unicode = parse_int(digits, 16, loc);
               Token::new(Char(Int::unsafe_to_char(unicode)), loc, 3 + digits.length());
             } else {
               self.retrace();
@@ -418,7 +406,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
                 }
                 digits.push(c);
               }
-              let unicode = parse_hex(digits, loc);
+              let unicode = parse_int(digits, 16, loc);
               Token::new(Char(Int::unsafe_to_char(unicode)), loc, 7);
             }
           }
@@ -432,7 +420,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
               }
               digits.push(c);
             }
-            let unicode = parse_hex(digits, loc);
+            let unicode = parse_int(digits, 16, loc);
             Token::new(Char(Int::unsafe_to_char(unicode)), loc, 7);
           }
           _ => {
@@ -541,7 +529,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
         let content = []
         for c = self.ch(); not(c is '\n'); c = self.ch() { content.push(c); }
         content.push('\n');
-        return Token::new(StrMergeable(String::from_array(content)), loc, content.length());
+        return Token::new(RawStr(String::from_array(content)), loc, content.length());
       }
       let name = [c];
       // Note that it's different from above: it also accepts '.'
@@ -556,10 +544,11 @@ pub fn Lexer::next(self: Lexer) -> Token {
     ' ' | '\r' | '\t' => self.next()
     '0'..='9' => {
       let octal = (c == '0');
+      let base = if (octal) { 8 } else { 10 }
       let digits = [c];
       let next = self.ch();
 
-      if (next == 'x' || next == 'X') {
+      if (octal && (next == 'x' || next == 'X')) {
         digits.push(next);
         for c = self.ch(); c is ('0'..='9' | 'a'..='f' | 'A'..='F'); c = self.ch() {
           digits.push(c);
@@ -585,24 +574,37 @@ pub fn Lexer::next(self: Lexer) -> Token {
           if (self.peek(0) is ('+' | '-')) {
             digits.push(self.ch());
           }
-          for c = self.ch(); c is ('0'..='9'); c = self.ch() {
+          for c = self.ch(); c is ('0'..='9' | 'a'..='f' | 'A'..='F'); c = self.ch() {
             digits.push(c);
           }
           self.retrace();
         }
+
+        // Suffix F for float
         if (self.peek(0) == 'f' || self.peek(0) == 'F') {
           self.ch() |> ignore;
           let vf = parse_float(digits, loc);
           return Token::new(Float(vf), loc, digits.length());
         }
+
         if (fp) {
           let vf = parse_double(digits, loc);
           return Token::new(Double(vf, String::from_array(digits)), loc, digits.length());
         }
-        let vi = parse_hex(digits, loc);
+
+        // Suffix L for int64
+        if (self.peek(0) == 'l' || self.peek(0) == 'L') {
+          self.ch() |> ignore;
+          let vl = parse_long(digits, 16, loc);
+          return Token::new(Long(vl), loc, digits.length());
+        }
+
+        let vi = parse_int(digits, 16, loc);
         return Token::new(Int(vi), loc, digits.length());
-      } else if (next is ('0'..='9' | '.' | 'e' | 'E')) {
-        if (not(next is ('.' | 'e' | 'E'))) {
+      } else {
+        let mut fp = next is ('.' | 'e' | 'E');
+
+        if (not(fp) && next is ('0'..='9')) {
           digits.push(next);
           for c = self.ch(); c is ('0'..='9'); c = self.ch() {
             digits.push(c);
@@ -611,7 +613,6 @@ pub fn Lexer::next(self: Lexer) -> Token {
 
         self.retrace();
         let next = self.peek(0);
-        let mut fp = false;
         // A floating point.
         // Similarly guard against ranges as 0..=4.
         if (next == '.' && self.peek(1) != '.') {
@@ -626,6 +627,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
         let next = self.peek(0);
         if (next == 'e' || next == 'E') {
           fp = true;
+          digits.push(self.ch());
           // Also allow '+' and '-'.
           if (self.peek(0) is ('+' | '-')) {
             digits.push(self.ch());
@@ -633,23 +635,31 @@ pub fn Lexer::next(self: Lexer) -> Token {
           for c = self.ch(); c is ('0'..='9'); c = self.ch() {
             digits.push(c);
           }
+          println("after e: \{digits}");
           self.retrace();
         }
+
+        // Suffix F for float
         if (self.peek(0) == 'f' || self.peek(0) == 'F') {
           self.ch() |> ignore;
           let vf = parse_float(digits, loc);
           return Token::new(Float(vf), loc, digits.length());
         }
+
         if (fp) {
           let vf = parse_double(digits, loc);
           return Token::new(Double(vf, String::from_array(digits)), loc, digits.length());
         }
-        let vi = @utils.ite(octal, parse_oct, parse_dec)(digits, loc);
+        
+        // Suffix L for int64
+        if (self.peek(0) == 'l' || self.peek(0) == 'L') {
+          self.ch() |> ignore;
+          let vl = parse_long(digits, base, loc);
+          return Token::new(Long(vl), loc, digits.length());
+        }
+
+        let vi = parse_int(digits, base, loc);
         return Token::new(Int(vi), loc, digits.length());
-      } else {
-        // A single character.
-        self.retrace();
-        return Token::new(Int(parse_dec([c], loc)), loc, 1);
       }
     }
     '.' => {
@@ -670,6 +680,22 @@ pub fn Lexer::next(self: Lexer) -> Token {
           digits.push(c);
         }
         self.retrace();
+        
+        // Check exponent.
+        let next = self.peek(0);
+        if (next == 'e' || next == 'E') {
+          digits.push(self.ch());
+          // Also allow '+' and '-'.
+          if (self.peek(0) is ('+' | '-')) {
+            digits.push(self.ch());
+          }
+          for c = self.ch(); c is ('0'..='9'); c = self.ch() {
+            digits.push(c);
+          }
+          println("after e: \{digits}");
+          self.retrace();
+        }
+
         // Check suffix
         if (self.peek(0) == 'f' || self.peek(0) == 'F') {
           self.ch() |> ignore;

@@ -245,6 +245,11 @@ pub fn Parser::basetype(self: Parser) -> Type {
     pack = Some(x);
     self.expect(Dot);
   }
+  if (self.peek().ty is Ident("_")) {
+    self.consume() |> ignore;
+    return Unknown;
+  }
+
   let ty = self.expect_typename();
   if (pack != self.pack) {
     return Named({ pack: pack, name: ty, namespace: None }, [])
@@ -312,12 +317,14 @@ pub fn Parser::binary_type(self: Parser) -> Type {
 
 ///|
 /// Parses functional types, i.e. those of form `(X, Y) -> Z`.
+/// 
+/// Note that tuples are also parsed here because they also start with a `(`.
 ///  
 pub fn Parser::functional_type(self: Parser) -> Type {
   if (self.checks(LPar)) {
     let args = [];
     while (not(self.checks(RPar)) && not(self.eof())) {
-      let ty = self.typename();
+      let ty = self.typenames();
       args.push(ty);
       if (not(self.peek().isa(RPar))) {
         self.expects(Comma);
@@ -329,7 +336,7 @@ pub fn Parser::functional_type(self: Parser) -> Type {
       }
       return Tuple(args);
     }
-    let ret = self.typename();
+    let ret = self.typenames();
     return Function(args, ret);
   }
   return self.binary_type();
@@ -343,11 +350,19 @@ pub fn Parser::typename(self: Parser) -> Type {
 }
 
 ///|
+/// **Strips newline**, and parses a type name.
+/// 
+pub fn Parser::typenames(self: Parser) -> Type {
+  self.strip();
+  return self.functional_type();
+}
+
+///|
 /// Consume the next token and returns the visibility denoted by that.
 /// 
 /// If no such token is encountered, this retraces and defaults to `Priv`.
 /// 
-pub fn Parser::visible(self: Parser) -> Visible {
+pub fn Parser::vis(self: Parser) -> Visible {
   let tok = self.consume();
   match (tok.ty) {
     Pub => Pub
@@ -511,9 +526,13 @@ pub fn Parser::matchexpr(self: Parser) -> AST {
   let branches = [];
   self.expects(LBrace);
   while (not(self.checks(RBrace)) && not(self.eof())) {
+    self.strip();
     let pattern = self.pattern();
+
     self.expects(Arrrow);
+    self.strip();
     let stmt = self.stmt();
+    
     branches.push((pattern, stmt));
   }
 
@@ -552,7 +571,7 @@ pub fn Parser::fstr(self: Parser, str_: String) -> AST {
           for c = ch(); c != '}'; c = ch() {
             digits.push(c);
           }
-          let unicode = parse_hex(digits, loc);
+          let unicode = parse_int(digits, 16, loc);
           current.push(Int::unsafe_to_char(unicode));
         } else {
           pos -= 1;
@@ -564,7 +583,7 @@ pub fn Parser::fstr(self: Parser, str_: String) -> AST {
             }
             digits.push(c);
           }
-          let unicode = parse_hex(digits, loc);
+          let unicode = parse_int(digits, 16, loc);
           current.push(Int::unsafe_to_char(unicode));
         }
       }
@@ -579,7 +598,7 @@ pub fn Parser::fstr(self: Parser, str_: String) -> AST {
           }
           digits.push(c);
         }
-        let unicode = parse_hex(digits, loc);
+        let unicode = parse_int(digits, 16, loc);
         current.push(Int::unsafe_to_char(unicode));
       }
       '{' => {
@@ -644,9 +663,11 @@ pub fn Parser::primary(self: Parser) -> AST {
   match (tok.ty) {
     Ident(name) => AST::new(VarRef(self.unqualified(name)), from, self.loc());
     Int(vi) => AST::new(Int(vi), from, self.loc());
+    Long(vl) => AST::new(Long(vl), from, self.loc());
     Double(vd, _) => AST::new(Double(vd), from, self.loc());
     Float(vf) => AST::new(Float(vf), from, self.loc());
     Str(vs) => self.fstr(vs);
+    RawStr(vs) => AST::new(Str(vs), from, self.loc());
     True => AST::new(Bool(true), from, self.loc());
     False => AST::new(Bool(false), from, self.loc());
     Char(vc) => AST::new(Char(vc), from, self.loc());
@@ -718,7 +739,7 @@ pub fn Parser::primary(self: Parser) -> AST {
     }
     Match => self.matchexpr();
     If => self.ifexpr();
-    Fn => self.fndecl(Priv);
+    Fn => self.fndecl(Priv, None);
     Typename(ty) => {
       if (self.check(ColonColon)) {
         // Ty::A(...)
@@ -767,10 +788,9 @@ pub fn Parser::primary(self: Parser) -> AST {
     LBracket => {
       let exprs = [];
       while (not(self.checks(RBracket)) && not(self.eof())) {
-        exprs.push(self.expr());
-        self.strip();
+        exprs.push(self.exprs());
 
-        if (not(self.peek().isa(RBracket))) {
+        if (not(self.peeks().isa(RBracket))) {
           self.expects(Comma);
         }
       }
@@ -805,9 +825,10 @@ pub fn Parser::postfix(self: Parser) -> AST {
     self.retrace(); return true;
   }
   
-  // Moonbit allows `.` to be on the next line.
-  while (self.peek().is_any([LPar, Dot, LBracket, Double(0, "")]) ||
-        (self.peek().isa(Newline) && self.checks(Dot) && retrace())) {
+  // Moonbit allows `.` and `..` to be on the next line.
+  while (self.peek().is_any([LPar, Dot, LBracket, Double(0, ""), Expand]) ||
+        (self.peek().isa(Newline) && self.checks(Dot) && retrace()) ||
+        (self.peek().isa(Newline) && self.checks(Expand) && retrace())) {
     if (self.peek().ty is Double(_, w)) {
       self.consume() |> ignore;
       // This is actually things like t.0, t.1;
@@ -818,15 +839,21 @@ pub fn Parser::postfix(self: Parser) -> AST {
         @diag.error(from, self.loc(), "unexpected double literal: \{w}");
         continue;
       }
-      let ind = parse_dec(chars[1:].to_array(), from)
+      let ind = parse_int(chars[1:].to_array(), 10, from)
       n = AST::new(TupleAccess(n, ind), from, self.loc());
       continue;
     }
 
     if (self.check(Dot)) {
-      let field = self.expect_ident();
+      let field = self.expect_idents();
       n = AST::new(FieldRef(n, field), from, self.loc());
       continue;
+    }
+
+    let mut chain = None;
+    if (self.check(Expand)) {
+      chain = Some(self.expect_idents());
+      // fallthrough
     }
 
     if (self.check(LPar)) {
@@ -856,7 +883,11 @@ pub fn Parser::postfix(self: Parser) -> AST {
           self.strip();
         }
       }
-      n = AST::new(Call(n, args, kwargs), from, self.loc())
+      n = if (chain is Some(field)) {
+        AST::new(ChainCall(n, field, args, kwargs), from, self.loc());
+      } else {
+        AST::new(Call(n, args, kwargs), from, self.loc())
+      }
       continue;
     }
 
@@ -1301,6 +1332,10 @@ pub fn Parser::stmt(self: Parser) -> AST {
       self.semicolon();
       AST::new(Guard(cond, other), from, self.loc());
     }
+    Raise => {
+      let expr = self.exprs();
+      AST::new(Unary(Raise, expr), from, self.loc());
+    }
     _ => {
       self.retrace();
       let from = self.peek().loc;
@@ -1377,7 +1412,7 @@ pub fn Parser::deriving(self: Parser) -> Array[Name] {
   deriving
 }
 
-pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
+pub fn Parser::fndecl(self: Parser, vis: Visible, ext: String?) -> AST {
   self.strip();
   let from = self.peek().loc;
   
@@ -1447,11 +1482,12 @@ pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
     // An FFI body.
     let tok = self.consumes();
     let endloc = tok.loc.advance(tok.len);
-    if (tok.ty is Str(w)) {
-      AST::new(FFIBody(w), tok.loc, endloc)
-    } else {
-      @diag.error(tok.loc, endloc, "expected a string literal as the external function name");
-      AST::new(Leaf, tok.loc, endloc);
+    match tok.ty {
+      Str(w) | RawStr(w) => AST::new(FFIBody(w), tok.loc, endloc)
+      _ => {
+        @diag.error(tok.loc, endloc, "expected a string literal as external function name");
+        AST::new(Leaf, tok.loc, endloc);
+      }
     }
   } else if (matching) {
     let from = self.peek().loc;
@@ -1473,13 +1509,13 @@ pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
   // FnDecl only records its return type;
   // the function type can be inferred from `params`.
   let ty = Function(argTys, retTy);
-  let ast = AST::new(FnDecl({ vis: visible, name, params, tyvars, body, ty, kwargs }), from, self.loc());
+  let ast = AST::new(FnDecl({ vis, name, params, tyvars, body, ty, kwargs, ext }), from, self.loc());
   ast.attr = self.attr;
   self.attr.clear();
   return ast;
 }
 
-pub fn Parser::structdecl(self: Parser, visible: Visible) -> AST {
+pub fn Parser::structdecl(self: Parser, vis: Visible, ext: String?) -> AST {
   self.strip();
   let from = self.peek().loc;
   let name = self.expect_typename();
@@ -1511,10 +1547,10 @@ pub fn Parser::structdecl(self: Parser, visible: Visible) -> AST {
   }
   let deriving = self.deriving();
   let detail = StructDetail :: {
-    vis: visible,
+    vis,
     name: self.unqualified(name),
     entries: Map::from_array(fields.map(fn (x) { (x.name, x) })),
-    tyvars, deriving
+    tyvars, deriving, ext
   };
   let ast = AST::new(StructDecl(detail), from, self.loc());
   ast.attr = self.attr;
@@ -1522,7 +1558,7 @@ pub fn Parser::structdecl(self: Parser, visible: Visible) -> AST {
   return ast;
 }
 
-pub fn Parser::enumdecl(self: Parser, visible: Visible) -> AST {
+pub fn Parser::enumdecl(self: Parser, vis: Visible, ext: String?) -> AST {
   self.strip();
   let from = self.peek().loc;
   let name = self.expect_typename();
@@ -1556,10 +1592,10 @@ pub fn Parser::enumdecl(self: Parser, visible: Visible) -> AST {
   }
   let deriving = self.deriving();
   let detail = EnumDetail :: {
-    vis: visible,
+    vis,
     name: self.unqualified(name),
     entries: Map::from_array(variants.map(fn (x) { (x.0, { tys: x.1, named: Map::new() }) })),
-    tyvars, deriving
+    tyvars, deriving, error: false, ext
   };
   let ast = AST::new(EnumDecl(detail), from, self.loc());
   ast.attr = self.attr;
@@ -1567,7 +1603,7 @@ pub fn Parser::enumdecl(self: Parser, visible: Visible) -> AST {
   return ast;
 }
 
-pub fn Parser::globaldecl(self: Parser, visible: Visible) -> AST {
+pub fn Parser::globaldecl(self: Parser, vis: Visible, ext: String?) -> AST {
   let from = self.peek().loc;
   let name = self.expect_idents();
   let mut ty = None;
@@ -1578,9 +1614,8 @@ pub fn Parser::globaldecl(self: Parser, visible: Visible) -> AST {
   let init = self.exprs();
   self.semicolon();
   let detail = GlobalDetail :: {
-    vis: visible,
+    vis, ext, init,
     name: self.unqualified(name),
-    init,
     ty: ty.or(Unknown)
   };
   let ast = AST::new(GlobalDecl(detail), from, self.loc());
@@ -1589,7 +1624,7 @@ pub fn Parser::globaldecl(self: Parser, visible: Visible) -> AST {
   return ast;
 }
 
-pub fn Parser::constdecl(self: Parser, visible: Visible) -> AST {
+pub fn Parser::constdecl(self: Parser, vis: Visible, ext: String?) -> AST {
   let from = self.peek().loc;
   self.strip();
   let name = self.expect_typename();
@@ -1601,9 +1636,8 @@ pub fn Parser::constdecl(self: Parser, visible: Visible) -> AST {
   let init = self.exprs();
   self.semicolon();
   let detail = GlobalDetail :: {
-    vis: visible,
     name: self.unqualified(name),
-    init,
+    init, ext, vis,
     ty: ty.or(Unknown)
   };
   let ast = AST::new(GlobalDecl(detail), from, self.loc());
@@ -1639,7 +1673,7 @@ pub fn Parser::qualified_name(self: Parser) -> Name {
   name;
 }
 
-pub fn Parser::impldecl(self: Parser, visible: Visible) -> AST {
+pub fn Parser::impldecl(self: Parser, vis: Visible, ext: String?) -> AST {
   let from = self.peek().loc;
   let tyvars = self.tyvars();
 
@@ -1657,7 +1691,7 @@ pub fn Parser::impldecl(self: Parser, visible: Visible) -> AST {
 
   self.expects(LPar);
   while (not(self.checks(RPar)) && not(self.eof())) {
-    let argname = self.expect_ident();
+    let argname = self.expect_idents();
     let mut ty = Type::Unknown;
     if (self.checks(Colon)) {
       ty = self.typename();
@@ -1665,7 +1699,7 @@ pub fn Parser::impldecl(self: Parser, visible: Visible) -> AST {
     params.push(argname);
     argTys.push(ty);
 
-    if (not(self.peek().isa(RPar))) {
+    if (not(self.peeks().isa(RPar))) {
       self.expects(Comma);
     }
   }
@@ -1681,7 +1715,7 @@ pub fn Parser::impldecl(self: Parser, visible: Visible) -> AST {
   // FnDecl only records its return type;
   // the function type can be inferred from `args`.
   let detail = ImplDetail :: {
-    vis: visible,
+    vis, ext,
     nstruct, ntrait, nfunc, params, body, tyvars,
     ty: Function(argTys, retTy)
   };
@@ -1692,26 +1726,26 @@ pub fn Parser::impldecl(self: Parser, visible: Visible) -> AST {
   return ast;
 }
 
-pub fn Parser::aliasfn(self: Parser, visible: Visible) -> AST {
+pub fn Parser::aliasfn(self: Parser, vis: Visible) -> AST {
   let from = self.peek().loc;
   let src = self.qualified_name();
   let mut tgt = src;
   if (self.checks(As)) {
     tgt = self.qualified_name();
   }
-  AST::new(Fnalias(visible, src, tgt), from, self.loc());
+  AST::new(Fnalias(vis, src, tgt), from, self.loc());
 }
 
-pub fn Parser::aliasty(self: Parser, visible: Visible) -> AST {
+pub fn Parser::aliasty(self: Parser, vis: Visible) -> AST {
   let from = self.peek().loc;
   let src = self.typename();
   let mut tgt = src;
   if (self.checks(As)) {
     tgt = self.typename();
-    return AST::new(Typealias(visible, src, tgt), from, self.loc());
+    return AST::new(Typealias(vis, src, tgt), from, self.loc());
   }
   if (src is Named(name, tyvars)) {
-    return AST::new(Typealias(visible, src, Named(name.unpack(), tyvars)), from, self.loc());
+    return AST::new(Typealias(vis, src, Named(name.unpack(), tyvars)), from, self.loc());
   }
   @diag.error(from, self.loc(), "aliasing non-user defined type");
   return AST::new(Leaf, from, self.loc());
@@ -1730,9 +1764,17 @@ pub fn Parser::tyvars(self: Parser) -> Array[Typevar] {
   tyvars
 }
 
-pub fn Parser::tydecl(self: Parser, visible: Visible) -> AST {
+///|
+/// Parses a top-level type declaration:
+/// 
+/// The modifier `pub(all)` etc. are handled in `toplevel().
+/// 
+pub fn Parser::tydecl(self: Parser, vis: Visible, ext: String?) -> AST {
   self.strip();
   let from = self.peek().loc;
+  // type! means an Error type.
+  let error = self.checks(Bang);
+
   let name = self.expect_typename();
   let name = self.unqualified(name);
   let tyvars = self.tyvars();
@@ -1755,9 +1797,8 @@ pub fn Parser::tydecl(self: Parser, visible: Visible) -> AST {
 
   let deriving = self.deriving();
   let detail = EnumDetail :: {
-    vis: visible,
     entries: Map::from_array([("__mem", { tys, named: Map::new() })]),
-    name, tyvars, deriving
+    name, tyvars, deriving, error, ext, vis
   }
   AST::new(EnumDecl(detail), from, self.loc())
 }
@@ -1809,31 +1850,53 @@ pub fn Parser::testdecl(self: Parser) -> AST {
   AST::new(Test(name, body), from, self.loc())
 }
 
-pub fn Parser::toplevel(self: Parser, visible: Visible) -> AST {
+///|
+/// Parses a toplevel declaration.
+/// 
+/// The arguments carry over visibility and extern information.
+/// 
+pub fn Parser::toplevel(self: Parser, vis: Visible, ext: String?) -> AST {
   let tok = self.consume();
   match (tok.ty) {
-    Fn => self.fndecl(visible);
-    Struct => self.structdecl(visible);
-    Enum => self.enumdecl(visible);
-    Let => self.globaldecl(visible);
-    Const => self.constdecl(visible);
-    Impl => self.impldecl(visible);
+    Fn => self.fndecl(vis, ext);
+    Struct => self.structdecl(vis, ext);
+    Enum => self.enumdecl(vis, ext);
+    Let => self.globaldecl(vis, ext);
+    Const => self.constdecl(vis, ext);
+    Impl => self.impldecl(vis, ext);
     EOF => AST::new(Leaf, Loc::unknown(), Loc::unknown());
-    Newline | Semicolon => self.toplevel(visible);
-    Fnalias => self.aliasfn(visible);
-    Typealias => self.aliasty(visible);
-    Type => self.tydecl(visible);
+    Newline | Semicolon => self.toplevel(vis, ext);
+    Fnalias => {
+      if (ext is Some(_)) {
+        @diag.error(tok.loc, self.loc(), "'extern' isn't allowed for function alias");
+      }
+      self.aliasfn(vis);
+    }
+    Typealias => {
+      if (ext is Some(_)) {
+        @diag.error(tok.loc, self.loc(), "'extern' isn't allowed for type alias");
+      }
+      self.aliasty(vis);
+    }
+    Type => self.tydecl(vis, ext);
     Test => {
-      if (visible != Priv) {
+      if (vis != Priv) {
         @diag.warning(tok.loc, self.loc(), WPubTest);
       }
       self.testdecl();
     }
-    Attribute(name) => { self.attribute(name); self.toplevel(visible) }
+    Attribute(name) => { self.attribute(name); self.toplevel(vis, ext) }
     Pub | Pubopen | Puball | Priv => {
       self.retrace();
-      let visible = self.visible();
-      return self.toplevel(visible);
+      let vis = self.vis();
+      return self.toplevel(vis, ext);
+    }
+    Extern => {
+      if (self.peeks().ty is Str(x)) {
+        self.consume() |> ignore;
+        return self.toplevel(vis, Some(x));
+      }
+      return self.toplevel(vis, Some("default"));
     }
     _ => {
       @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected top-level token \{tok.ty}");
@@ -1841,16 +1904,21 @@ pub fn Parser::toplevel(self: Parser, visible: Visible) -> AST {
       if (not(self.eof())) {
         self.retrace();
       }
-      return self.toplevel(visible);
+      return self.toplevel(vis, ext);
     }
   }
 }
 
+///|
+/// Handles a translation unit.
+/// 
+/// It produces a block containing all toplevel declarations and definitions.
+/// 
 pub fn Parser::toplevel_block(self: Parser) -> AST {
   let top = [];
 
   while (not(self.eof())) {
-    let ast = self.toplevel(Priv);
+    let ast = self.toplevel(Priv, None);
     if (ast.kind is Leaf) {
       break;
     }
@@ -1859,6 +1927,9 @@ pub fn Parser::toplevel_block(self: Parser) -> AST {
   return AST::new(Block(top), self.data[0].loc, self.loc());
 }
 
+///|
+/// Entry point of parsing.
+/// 
 pub fn Parser::parse(self: Parser) -> AST {
   if self.data.length() == 0 {
     return AST::new(Leaf, Loc::unknown(), Loc::unknown())

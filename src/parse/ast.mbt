@@ -23,6 +23,7 @@ pub(all) enum UnaryKind {
   Minus
   Try
   Expand
+  Raise
 } derive(Eq, Hash)
 
 pub(all) enum Visible {
@@ -94,6 +95,7 @@ pub struct StructDetail {
   deriving: Array[Name]
   tyvars: Array[Typevar]
   name: Name
+  ext: String?
 }
 
 pub struct EnumDetail {
@@ -102,6 +104,8 @@ pub struct EnumDetail {
   deriving: Array[Name]
   tyvars: Array[Typevar]
   name: Name
+  error: Bool
+  ext: String?
 }
 
 pub struct GlobalDetail {
@@ -109,6 +113,7 @@ pub struct GlobalDetail {
   name: Name
   init: AST
   ty: Type
+  ext: String?
 }
 
 pub struct LocalDetail {
@@ -132,6 +137,7 @@ pub struct FnDetail {
   kwargs: Array[Kwarg]
   body: AST
   ty: Type
+  ext: String?
 }
 
 pub struct ImplDetail {
@@ -143,6 +149,7 @@ pub struct ImplDetail {
   tyvars: Array[Typevar]
   body: AST
   ty: Type
+  ext: String?
 }
 
 pub impl Show for StructEntry with to_string(self) -> String {
@@ -213,12 +220,13 @@ pub impl Show for Typevar with output(self, writer) -> Unit {
 /// * `FieldRef(AST, String)`: Field access on an expression.
 /// * `Return(Option[AST])`: Return statement with optional return value.
 /// * `Int(Int)`: Integer literal.
+/// * `Long(Int64)`: Long integer (64-bit integer) literal.
 /// * `Call(AST, Array[AST], Map[String, AST])`: Function call with positional
 /// and keyword (named) arguments. These are referred to as `kwargs` throughout
 /// the code and in documentation.
-/// * `ThisCall(AST, String, Array[AST], Map[String, AST])`: Method call on an
-/// object, recording the object, function name and both positional and keyword
-/// arguments.
+/// * `ChainCall(AST, String, Array[AST], Map[String, AST])`: Method call on an
+/// object with the `..` operator. This AST node records the object, function name
+/// and both positional and keyword arguments.
 /// * `Double(Double)`: Double-precision floating-point literal.
 /// * `Float(Float)`: Single-precision floating-point literal.
 /// * `Str(String)`: String literal.
@@ -249,6 +257,9 @@ pub impl Show for Typevar with output(self, writer) -> Unit {
 /// else branch.
 /// * `Test(Option[String], AST)`: Test block with an optional name.
 /// * `FFIBody(String)`: Foreign function interface body.
+/// * `Byte(Byte)`: A byte literal.
+/// * `ByteStr(Bytes)`: A byte-string literal.
+/// * `Raise`: Raise an error.
 /// * `Unit`: Unit value `()`.
 /// * `Leaf`: Placeholder node (typically removed during processing).
 ///
@@ -275,8 +286,9 @@ pub(all) enum ASTType {
   FieldRef(AST, String)
   Return(Option[AST])
   Int(Int)
+  Long(Int64)
   Call(AST, Array[AST], Map[String, AST])
-  ThisCall(AST, String, Array[AST], Map[String, AST])
+  ChainCall(AST, String, Array[AST], Map[String, AST])
   Double(Double)
   Float(Float)
   Str(String)
@@ -324,6 +336,7 @@ pub(all) enum Type {
   Char
   Option(Type)
   Unknown
+  Long
   Weak(Ref[Type])
   MayError(Type, Type)
   HasError(Type, Type)
@@ -378,8 +391,9 @@ pub impl Show for UnaryKind with to_string(self) -> String {
   match self {
     Not => "!"
     Minus => "-"
-    Try => "try?"
+    Try => "try? "
     Expand => ".."
+    Raise => "raise "
   }
 }
 
@@ -463,6 +477,7 @@ pub impl Show for Type with to_string(self) -> String {
     Char => "Char"
     String => "String"
     Error => "Error"
+    Long => "Long"
     Named(x, []) | Struct(x, []) | Enum(x, []) => x.to_string()
     Named(x, arr) | Struct(x, arr) | Enum(x, arr) => {
       let s = arr.map(Type::to_string).join(", ")
@@ -542,7 +557,8 @@ fn dep_str(ast: AST, depth: Int) -> String {
     Unit => "()"
     Leaf => "<leaf>"
     Byte(vb) => "\{vb}"
-    ByteStr(vs) => "\{vs}" // TODO: convert it into \x?? in entirety
+    ByteStr(vs) => "\{vs}"
+    Long(vl) => "\{vl}L"
     Fstr(vs) => "\"\{escapef(vs, depth)}\""
     FFIBody(ffi) => "= \{ffi}"
     Arr(arr) => {
@@ -582,13 +598,14 @@ fn dep_str(ast: AST, depth: Int) -> String {
       "(\{s})"
     }
     GlobalDecl(detail) => {
-      let { vis, name, init, ty } = detail;
-      let visible = @utils.ite(vis == Priv, "", "\{vis} ")
-      "let \{visible}\{name}: \{ty} = \{dep_str(init, depth)}";
+      let { vis, name, init, ty, ext } = detail;
+      let visible = @utils.ite(vis == Priv, "", "\{vis} ");
+      let ext = if (ext is Some(w)) { "extern \"\{w}\"" } else { "" };
+      "\{ext}let \{visible}\{name}: \{ty} = \{dep_str(init, depth)}";
     }
     ParamDecl(name) => name
     FnDecl(detail) => {
-      let { vis, name, params, tyvars, body, ty, kwargs } = detail;
+      let { vis, name, params, tyvars, body, ty, kwargs, ext } = detail;
       let params = if (["main", "init"].contains(name.name)) {
         ""
       } else {
@@ -608,7 +625,8 @@ fn dep_str(ast: AST, depth: Int) -> String {
       let ret = if (ty is Function(_, ret)) { "\{ret}" } else { "" };
       let visible = if (vis == Priv) { "" } else { "\{vis} " };
       let tyvars = if (tyvars.is_empty()) { "" } else { let s = tyvars.map(Typevar::to_string).join(", "); "[\{s}]" };
-      "\{visible}fn\{tyvars} \{name}\{params} -> \{ret} \{dep_str(body, depth)}"
+      let ext = if (ext is Some(w)) { "extern \"\{w}\"" } else { "" };
+      "\{visible}\{ext}fn\{tyvars} \{name}\{params} -> \{ret} \{dep_str(body, depth)}"
     }
     ImplDecl(detail) => {
       let params = detail.params.join(", ");
@@ -617,17 +635,18 @@ fn dep_str(ast: AST, depth: Int) -> String {
       "\{visible}impl\{tyvars} \{detail.ntrait} for \{detail.nstruct} with \{detail.nfunc}(\{params}) \{dep_str(detail.body, depth)}"
     }
     StructDecl(detail) => {
-      let { name, entries, tyvars, deriving, vis } = detail;
+      let { name, entries, tyvars, deriving, vis, ext } = detail;
       let indent = String::make(@math.maximum(2 * depth - 2, 0), ' ');
       let fields = entries.values().map(StructEntry::to_string).join("\n  \{indent}");
       let visible = if (vis == Priv) { "" } else { "\{vis} " };
       let deriving = deriving.map(Name::to_string).join(", ");
       let deriving = @utils.ite(deriving.length() == 0, "", " derive (\{deriving})");
       let tyvars = if (tyvars.is_empty()) { "" } else { let s = tyvars.map(Typevar::to_string).join(", "); "[\{s}]" };
-      "\{visible}struct \{name}\{tyvars} {\n  \{indent}\{fields}\n\{indent}}\{deriving}"
+      let ext = if (ext is Some(w)) { "extern \"\{w}\"" } else { "" };
+      "\{visible}\{ext}struct \{name}\{tyvars} {\n  \{indent}\{fields}\n\{indent}}\{deriving}"
     }
     EnumDecl(detail) => {
-      let { name, entries, tyvars, deriving, vis } = detail;
+      let { name, entries, tyvars, deriving, vis, error: _, ext } = detail;
       let indent = String::make(@math.maximum(2 * depth - 2, 0), ' ');
       let fields = entries.iter().map(fn (t) {
         let (x, y) = t;
@@ -639,7 +658,8 @@ fn dep_str(ast: AST, depth: Int) -> String {
       let deriving = deriving.map(Name::to_string).join(", ");
       let deriving = @utils.ite(deriving.length() == 0, "", " derive (\{deriving})");
       let tyvars = if (tyvars.is_empty()) { "" } else { let s = tyvars.map(Typevar::to_string).join(", "); "[\{s}]" };
-      "\{visible}struct \{name}\{tyvars} {\n  \{indent}\{fields}\n\{indent}}\{deriving}";
+      let ext = if (ext is Some(w)) { "extern \"\{w}\"" } else { "" };
+      "\{visible}\{ext}enum \{name}\{tyvars} {\n  \{indent}\{fields}\n\{indent}}\{deriving}";
     }
     StructInit(map) => {
       let fields = map.to_array().map(fn (t) {
@@ -676,13 +696,13 @@ fn dep_str(ast: AST, depth: Int) -> String {
       }
       "\{dep_str(call, depth)}(\{args}\{pos})";
     }
-    ThisCall(this, name, args, kwargs) => {
+    ChainCall(this, name, args, kwargs) => {
       let args = args.map(fn (x) { dep_str(x, depth) }).join(", ");
       let mut pos = kwargs.iter().map(fn (x) { "\{x.0}=\{dep_str(x.1, depth)}" }).collect().join(", ");
       if (args.length() >= 1 && not(pos.is_empty())) {
         pos = ", \{pos}"
       }
-      "\{dep_str(this, depth)}.\{name}(\{args}\{pos})";
+      "\{dep_str(this, depth)}..\{name}(\{args}\{pos})";
     }
     EnumConstr(name, args) => {
       let args = args.map(fn (x) { dep_str(x, depth) }).join(", ");
@@ -798,7 +818,7 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     Block(body) => Block(body.map(mapper))
     Return(x) => Return(x.map(f))
     Call(x, args, kwargs) => Call(x.map(f), args.map(mapper), cvt(kwargs, f));
-    ThisCall(x, name, args, kwargs) => ThisCall(x.map(f), name, args.map(mapper), cvt(kwargs, f));
+    ChainCall(x, name, args, kwargs) => ChainCall(x.map(f), name, args.map(mapper), cvt(kwargs, f));
     FieldRef(x, name) => FieldRef(x.map(f), name)
     StructInit(map) => StructInit(cvt(map, f))
     StructModif(base, map) => StructModif(base.map(f), cvt(map, f))
@@ -822,7 +842,7 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     StructDecl(_) | Double(_) | Float(_) | Str(_) |
     Unit | EnumDecl(_) | Bool(_) | Char(_) |
     Typealias(_) | Fnalias(_) | FFIBody(_) | Byte(_) |
-    ByteStr(_) => self.kind
+    ByteStr(_) | Long(_) => self.kind
   }
   });
 }
@@ -865,7 +885,7 @@ pub fn Type::map(self: Type, f: (Type) -> Type) -> Type {
     MayError(x, y) => MayError(x.map(f), y.map(f))
     Unknown | Int | Double | Float |
     Char | Bool | Typevar(_) | Unit |
-    String | Error => self
+    String | Error | Long => self
   })
 }
 
