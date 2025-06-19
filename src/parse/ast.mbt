@@ -503,7 +503,7 @@ fn escape(s: String) -> String {
     return c;
   }
 
-  while (pos < s.length()) {
+  while (pos < str.length()) {
     match ch() {
       '\n' => result.append(['\\', 'n'])
       '\t' => result.append(['\\', 't'])
@@ -542,7 +542,7 @@ fn dep_str(ast: AST, depth: Int) -> String {
     Unit => "()"
     Leaf => "<leaf>"
     Byte(vb) => "\{vb}"
-    ByteStr(vs) => "b\"\{vs}\"" // TODO: convert it into \x?? in entirety
+    ByteStr(vs) => "\{vs}" // TODO: convert it into \x?? in entirety
     Fstr(vs) => "\"\{escapef(vs, depth)}\""
     FFIBody(ffi) => "= \{ffi}"
     Arr(arr) => {

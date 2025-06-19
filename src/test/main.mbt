@@ -16,7 +16,7 @@ fn parse(file: String, content: String) -> Unit {
     return;
   }
 
-  let parser = @parse.Parser::new(None, "<stdin>", tokens);
+  let parser = @parse.Parser::new(None, file, tokens);
   let ast = parser.parse();
   let good = @diag.report();
   if (not(good)) {

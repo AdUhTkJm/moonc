@@ -545,10 +545,32 @@ pub fn Parser::fstr(self: Parser, str_: String) -> AST {
       '"'  => current.push('"')
       '\'' => current.push('\'')
       '0'  => current.push('\u0000')
-      'u'  => {
+      'u' => {
         let digits = [];
         let loc = from.advance(pos);
-        for i in 0..<4 {
+        if (ch() == '{') {
+          for c = ch(); c != '}'; c = ch() {
+            digits.push(c);
+          }
+          let unicode = parse_hex(digits, loc);
+          current.push(Int::unsafe_to_char(unicode));
+        } else {
+          for i in 0..<4 {
+            let c = ch();
+            if (not(c is ('0'..='9' | 'a'..='f' | 'A'..='F'))) {
+              @diag.error(loc, loc.advance(i), "unexpected unicode escape sequence");
+              break;
+            }
+            digits.push(c);
+          }
+          let unicode = parse_hex(digits, loc);
+          current.push(Int::unsafe_to_char(unicode));
+        }
+      }
+      'x' => {
+        let digits = [];
+        let loc = from.advance(pos);
+        for i in 0..<2 {
           let c = ch();
           if (not(c is ('0'..='9' | 'a'..='f' | 'A'..='F'))) {
             @diag.error(loc, loc.advance(i), "unexpected unicode escape sequence");
@@ -994,6 +1016,7 @@ pub fn Parser::bitand(self: Parser) -> AST {
   let from = self.peek().loc;
   let mut n = self.eq();
   while (self.check(Bitand)) {
+    self.strip();
     let x = self.eq();
     n = AST::new(Binary(Bitand, n, x), from, self.loc());
   }
@@ -1004,6 +1027,7 @@ pub fn Parser::xor(self: Parser) -> AST {
   let from = self.peek().loc;
   let mut n = self.bitand();
   while (self.check(Xor)) {
+    self.strip();
     let x = self.bitand();
     n = AST::new(Binary(Xor, n, x), from, self.loc());
   }
@@ -1014,6 +1038,7 @@ pub fn Parser::bitor(self: Parser) -> AST {
   let from = self.peek().loc;
   let mut n = self.xor();
   while (self.check(Bitor)) {
+    self.strip();
     let x = self.xor();
     n = AST::new(Binary(Bitor, n, x), from, self.loc());
   }
@@ -1024,6 +1049,7 @@ pub fn Parser::logand(self: Parser) -> AST {
   let from = self.peek().loc;
   let mut n = self.bitor();
   while (self.check(Logand)) {
+    self.strip();
     let x = self.bitor();
     n = AST::new(Binary(And, n, x), from, self.loc());
   }
@@ -1034,6 +1060,7 @@ pub fn Parser::logor(self: Parser) -> AST {
   let from = self.peek().loc;
   let mut n = self.logand();
   while (self.check(Logor)) {
+    self.strip();
     let x = self.logand();
     n = AST::new(Binary(Or, n, x), from, self.loc());
   }
@@ -1085,8 +1112,12 @@ pub fn Parser::cast(self: Parser) -> AST {
   // Moonbit does not support things like `10: Byte: Int`.
   // EXTENSION: we regard this as a C-style forced cast, rather than an annotation.
   if (self.checks(Colon)) {
-    let ty = self.typename();
-    n.ty = ty;
+    if (not(self.peek().isa(Typename("")))) {
+      // This is a view like a[1:2].
+      self.retrace();
+    } else {
+      n.ty = self.typename();
+    }
   }
   return n;
 }
@@ -1221,6 +1252,10 @@ pub fn Parser::stmt(self: Parser) -> AST {
         self.expects(Assign);
         let val = self.exprs();
         names.push((ident, val));
+
+        if (self.check(Newline)) {
+          break;
+        }
         if (not(self.peeks().is_any([Semicolon, LBrace]))) {
           self.expect(Comma);
         }
@@ -1240,6 +1275,9 @@ pub fn Parser::stmt(self: Parser) -> AST {
         self.expects(Assign);
         let step = self.exprs();
         steps.push((name, step));
+        if (self.check(Newline)) {
+          break;
+        }
         if (not(self.peeks().is_any([Semicolon, LBrace]))) {
           self.expect(Comma);
         }
@@ -1361,9 +1399,11 @@ pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
   let params = [];
   let argTys = [];
   let kwargs = [];
-  self.strip();
-  if (not(["main", "init"].contains(name.name))) {
-    self.expect(LPar);
+  let special = ["main", "init"].contains(name.name);
+  let matching = not(special) && not(self.peeks().isa(LPar));
+
+  if (not(special) && not(matching)) {
+    self.expects(LPar);
     self.strip();
     while (not(self.checks(RPar)) && not(self.eof())) {
       let argname = self.expect_idents();
@@ -1412,6 +1452,20 @@ pub fn Parser::fndecl(self: Parser, visible: Visible) -> AST {
       @diag.error(tok.loc, endloc, "expected a string literal as the external function name");
       AST::new(Leaf, tok.loc, endloc);
     }
+  } else if (matching) {
+    let from = self.peek().loc;
+    params.push("__matcher");
+    // This is a match expression.
+    let branches = [];
+    self.expects(LBrace);
+    while (not(self.checks(RBrace)) && not(self.eof())) {
+      let pattern = self.pattern();
+      self.expects(Arrrow);
+      let stmt = self.stmt();
+      branches.push((pattern, stmt));
+    }
+    let varref = AST::new(VarRef(self.unqualified("__matcher")), from, from);
+    AST::new(Match(varref, branches), from, self.loc());
   } else {
     self.block();
   }

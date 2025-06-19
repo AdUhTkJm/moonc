@@ -115,6 +115,76 @@ pub fn parse_float(digits: Array[Char], from: @diag.Loc) -> Float {
   }
 }
 
+fn de_escape(loc: Loc, str_: String) -> String {
+  let str = str_.to_array();
+  let mut pos = 0;
+  let mut loc = loc;
+
+  let ch = fn () {
+    let c = str[pos];
+    pos += 1;
+    loc = loc.advance(1);
+    return c;
+  }
+  let current = [];
+
+  while (pos < str.length()) {
+    match ch() {
+    '\\' => {
+      let next = ch();
+      match next {
+      'n'  => current.push('\n')
+      't'  => current.push('\t')
+      'r'  => current.push('\r')
+      '\\' => current.push('\\')
+      '"'  => current.push('"')
+      '\'' => current.push('\'')
+      '0'  => current.push('\u0000')
+      'u' => {
+        let digits = [];
+        if (ch() == '{') {
+          for c = ch(); c != '}'; c = ch() {
+            digits.push(c);
+          }
+          let unicode = parse_hex(digits, loc);
+          current.push(Int::unsafe_to_char(unicode));
+        } else {
+          for i in 0..<4 {
+            let c = ch();
+            if (not(c is ('0'..='9' | 'a'..='f' | 'A'..='F'))) {
+              @diag.error(loc, loc.advance(i), "unexpected unicode escape sequence");
+              break;
+            }
+            digits.push(c);
+          }
+          let unicode = parse_hex(digits, loc);
+          current.push(Int::unsafe_to_char(unicode));
+        }
+      }
+      'x' => {
+        let digits = [];
+        for i in 0..<2 {
+          let c = ch();
+          if (not(c is ('0'..='9' | 'a'..='f' | 'A'..='F'))) {
+            @diag.error(loc, loc.advance(i), "unexpected unicode escape sequence");
+            break;
+          }
+          digits.push(c);
+        }
+        let unicode = parse_hex(digits, loc);
+        current.push(Int::unsafe_to_char(unicode));
+      }
+      _ => {
+        @diag.error(loc, loc.advance(1), "unknown escape sequence");
+      }
+      }
+    }
+    c => current.push(c);
+    }
+  }
+  return String::from_array(current);
+}
+
 fn merge_str(tokens: Array[Token]) -> Array[Token] {
   if tokens.is_empty() {
     return tokens;
@@ -397,7 +467,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
 
         // Don't worry about f-strings. They aren't handled in lexer.
         guard str.ty is Str(x);
-        return Token::new(ByteStr(@encoding.encode(@encoding.UTF8, x)), loc, str.len + 1);
+        return Token::new(ByteStr(@encoding.encode(@encoding.UTF8, de_escape(loc, x))), loc, str.len + 1);
       }
 
       let name = [c];

@@ -189,6 +189,29 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
         Unit
       }
     }
+    For(starts, stop, steps, body, exit) => {
+      let vars = Set::new();
+      for init in starts {
+        let (var, init) = init;
+        vars.add(var);
+        self.add_local(var, self.infer(init));
+      }
+      unify(self.infer(stop), Bool, stop.from, stop.to) |> ignore;
+      for step in steps {
+        let (var, init) = step;
+        if (not(vars.contains(var))) {
+          @diag.error(init.from, init.to, "unknown induction variable: \{var}");
+        } else {
+          init.ty = unify(self._locals[var].ty, self.infer(init), init.from, init.to);
+        }
+      }
+      body.ty = unify(self.infer(body), Unit, body.from, body.to);
+      // TODO: break-carried result
+      if (exit is Some(exit)) {
+        exit.ty = self.infer(exit);
+      }
+      Unit
+    }
     // View(_) => ...
     // Fnalias(_) => ...
     // Typealias(_) => ...
