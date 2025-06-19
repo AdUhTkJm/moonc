@@ -48,6 +48,7 @@ pub(all) enum TokenType {
   Guard
   Raise
   Test
+  Const
 
   // Operators
   LBrace            // {
@@ -190,6 +191,7 @@ pub impl Show for TokenType with to_string(self) -> String {
     Guard => "guard"
     Raise => "raise"
     Test => "test"
+    Const => "const"
     Str(x) => "string literal \"\{x}\""
     StrMergeable(x) => "mergeable string literal \"\{x}\""
     Double(_, str) => "double literal \{str}"

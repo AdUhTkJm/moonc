@@ -332,16 +332,24 @@ pub fn Lexer::next(self: Lexer) -> Token {
           'b' => Token::new(Char('\b'), loc, 4)
           'u' => {
             let digits = [];
-            for i in 0..<4 {
-              let c = self.ch();
-              if (not(c is ('0'..='9' | 'a'..='f' | 'A'..='F'))) {
-                @diag.error(loc, loc.advance(i), "unexpected unicode escape sequence");
-                break;
+            if (self.ch() == '{') {
+              for c = self.ch(); c != '}'; c = self.ch() {
+                digits.push(c);
               }
-              digits.push(c);
+              let unicode = parse_hex(digits, loc);
+              Token::new(Char(Int::unsafe_to_char(unicode)), loc, 3 + digits.length());
+            } else {
+              for i in 0..<4 {
+                let c = self.ch();
+                if (not(c is ('0'..='9' | 'a'..='f' | 'A'..='F'))) {
+                  @diag.error(loc, loc.advance(i), "unexpected unicode escape sequence");
+                  break;
+                }
+                digits.push(c);
+              }
+              let unicode = parse_hex(digits, loc);
+              Token::new(Char(Int::unsafe_to_char(unicode)), loc, 7);
             }
-            let unicode = parse_hex(digits, loc);
-            Token::new(Char(Int::unsafe_to_char(unicode)), loc, 7);
           }
           'x' => {
             let digits = [];
@@ -430,6 +438,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
         "guard" => Token::new(Guard, loc, 5)
         "raise" => Token::new(Raise, loc, 5)
         "test" => Token::new(Test, loc, 4)
+        "const" => Token::new(Const, loc, 5)
         "pub" => {
           if (self.check("(all)")) {
             return Token::new(Puball, loc, 8);

@@ -13,10 +13,16 @@ pub fn Parser::new(pack: Option[String], filename: String, tokens: Array[Token])
   return { place: 0, data: tokens, pack: pack, filename: filename, attr: [] }
 }
 
+///|
+/// Returns source location of EOF.
+/// 
 pub fn Parser::eof_loc(self: Parser) -> Loc {
   return self.data.last().unwrap().loc;
 }
 
+///|
+/// Checks whether the token stream has reached EOF.
+/// 
 pub fn Parser::eof(self: Parser) -> Bool {
   return self.peek().isa(EOF);
 }
@@ -206,6 +212,9 @@ pub fn Parser::strip(self: Parser) -> Unit {
   }
 }
 
+///|
+/// Ignores everything until any token in `stop`. The `stop` itself is also consumed.
+/// 
 pub fn Parser::ignore_until(self: Parser, stop: Array[TokenType]) -> Unit {
   stop.push(EOF);
   for c = self.consume(); not(c.is_any(stop)); c = self.consume() { }
@@ -213,12 +222,14 @@ pub fn Parser::ignore_until(self: Parser, stop: Array[TokenType]) -> Unit {
 
 ///|
 /// Produces a name with the parser's current package, but without any namespace.
+/// 
 pub fn Parser::unqualified(self: Parser, x: String) -> Name {
   Name::unqualified(self.pack, x);
 }
 
 ///|
 /// Produces a name with the parser's current package, and with the specified namespace.
+/// 
 pub fn Parser::qualified(self: Parser, namespace: String, x: String) -> Name {
   Name::qualified(self.pack, namespace, x);
 }
@@ -248,6 +259,7 @@ pub fn Parser::basetype(self: Parser) -> Type {
 }
 
 ///|
+/// Parses postfixes `?` and `[T]` (as type arguments).
 /// 
 pub fn Parser::postfix_type(self: Parser) -> Type {
   let from = self.peek().loc;
@@ -281,6 +293,9 @@ pub fn Parser::postfix_type(self: Parser) -> Type {
   return ty;
 }
 
+///| 
+/// Parses binary type operator `?`, `!` and `raise`.
+/// 
 pub fn Parser::binary_type(self: Parser) -> Type {
   let mut ty = self.postfix_type();
   while (self.peek().is_any([Ques, Raise, Bang])) {
@@ -295,6 +310,9 @@ pub fn Parser::binary_type(self: Parser) -> Type {
   return ty;
 }
 
+///|
+/// Parses functional types, i.e. those of form `(X, Y) -> Z`.
+///  
 pub fn Parser::functional_type(self: Parser) -> Type {
   if (self.checks(LPar)) {
     let args = [];
@@ -317,10 +335,18 @@ pub fn Parser::functional_type(self: Parser) -> Type {
   return self.binary_type();
 }
 
+///|
+/// Entry of type parsing.
+/// 
 pub fn Parser::typename(self: Parser) -> Type {
   return self.functional_type();
 }
 
+///|
+/// Consume the next token and returns the visibility denoted by that.
+/// 
+/// If no such token is encountered, this retraces and defaults to `Priv`.
+/// 
 pub fn Parser::visible(self: Parser) -> Visible {
   let tok = self.consume();
   match (tok.ty) {
@@ -751,8 +777,14 @@ pub fn Parser::primary(self: Parser) -> AST {
 pub fn Parser::postfix(self: Parser) -> AST {
   let from = self.peek().loc;
   let mut n = self.primary();
+
+  fn retrace() {
+    self.retrace(); return true;
+  }
   
-  while (self.peek().is_any([LPar, Dot, LBracket, Double(0, "")])) {
+  // Moonbit allows `.` to be on the next line.
+  while (self.peek().is_any([LPar, Dot, LBracket, Double(0, "")]) ||
+        (self.peek().isa(Newline) && self.checks(Dot) && retrace())) {
     if (self.peek().ty is Double(_, w)) {
       self.consume() |> ignore;
       // This is actually things like t.0, t.1;
@@ -1048,8 +1080,19 @@ pub fn Parser::tryres(self: Parser) -> AST {
   return self.pipe();
 }
 
+pub fn Parser::cast(self: Parser) -> AST {
+  let n = self.tryres();
+  // Moonbit does not support things like `10: Byte: Int`.
+  // EXTENSION: we regard this as a C-style forced cast, rather than an annotation.
+  if (self.checks(Colon)) {
+    let ty = self.typename();
+    n.ty = ty;
+  }
+  return n;
+}
+
 pub fn Parser::expr(self: Parser) -> AST {
-  return self.tryres();
+  return self.cast();
 }
 
 pub fn Parser::exprs(self: Parser) -> AST {
@@ -1477,8 +1520,7 @@ pub fn Parser::globaldecl(self: Parser, visible: Visible) -> AST {
     ty = Some(self.typename());
   }
   self.expects(Assign);
-  self.strip();
-  let init = self.expr();
+  let init = self.exprs();
   self.semicolon();
   let detail = GlobalDetail :: {
     vis: visible,
@@ -1491,6 +1533,30 @@ pub fn Parser::globaldecl(self: Parser, visible: Visible) -> AST {
   self.attr.clear();
   return ast;
 }
+
+pub fn Parser::constdecl(self: Parser, visible: Visible) -> AST {
+  let from = self.peek().loc;
+  self.strip();
+  let name = self.expect_typename();
+  let mut ty = None;
+  if (self.checks(Colon)) {
+    ty = Some(self.typename());
+  }
+  self.expects(Assign);
+  let init = self.exprs();
+  self.semicolon();
+  let detail = GlobalDetail :: {
+    vis: visible,
+    name: self.unqualified(name),
+    init,
+    ty: ty.or(Unknown)
+  };
+  let ast = AST::new(GlobalDecl(detail), from, self.loc());
+  ast.attr = self.attr;
+  self.attr.clear();
+  return ast;
+}
+
 
 pub fn Parser::qualified_typename(self: Parser) -> Name {
   let mut pack = None;
@@ -1695,13 +1761,19 @@ pub fn Parser::toplevel(self: Parser, visible: Visible) -> AST {
     Struct => self.structdecl(visible);
     Enum => self.enumdecl(visible);
     Let => self.globaldecl(visible);
+    Const => self.constdecl(visible);
     Impl => self.impldecl(visible);
     EOF => AST::new(Leaf, Loc::unknown(), Loc::unknown());
     Newline | Semicolon => self.toplevel(visible);
     Fnalias => self.aliasfn(visible);
     Typealias => self.aliasty(visible);
     Type => self.tydecl(visible);
-    Test => self.testdecl();
+    Test => {
+      if (visible != Priv) {
+        @diag.warning(tok.loc, self.loc(), WPubTest);
+      }
+      self.testdecl();
+    }
     Attribute(name) => { self.attribute(name); self.toplevel(visible) }
     Pub | Pubopen | Puball | Priv => {
       self.retrace();

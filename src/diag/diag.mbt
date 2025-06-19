@@ -18,32 +18,25 @@ pub struct DiagEnv {
   // Maps filenames to the code in it.
   content: Map[String, FileInfo]
   errors: Array[Diag]
+  warnings: Array[Diag]
 };
 
-let env: DiagEnv = { content: Map::new(), errors: [] };
+let env: DiagEnv = { content: Map::new(), errors: [], warnings: [] };
 
 ///|
-/// Records a diagnostic error for later reporting.
-///
-/// Parameters:
-///
-/// * `from` : The starting location of the error in the source code.
-/// * `to` : The ending location of the error in the source code.
-/// * `msg` : The error message describing what went wrong.
-///
-/// Example:
-///
-/// ```moonbit
-/// test "error" {
-///   let from = Loc::{ filename: "test.mbt", charpos: 0 }
-///   let to = Loc::{ filename: "test.mbt", charpos: 5 }
-///   @diag.error(from, to, "syntax error")
-///   inspect(@diag.errcnt(), content="1")
-/// }
-/// ```
+/// Records a diagnostic error for later reporting. The source location of
+/// the error is provided.
 ///
 pub fn error(from: Loc, to: Loc, msg: String) -> Unit {
   env.errors.push({ from: from, to: to, msg: msg });
+}
+
+///|
+/// Records a diagnostic warning for later reporting. The source location of
+/// the error is provided.
+///
+pub fn warning(from: Loc, to: Loc, msg: Warning) -> Unit {
+  env.warnings.push({ from: from, to: to, msg: msg.to_string() });
 }
 
 ///|
