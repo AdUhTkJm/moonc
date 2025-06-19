@@ -409,6 +409,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
               let unicode = parse_hex(digits, loc);
               Token::new(Char(Int::unsafe_to_char(unicode)), loc, 3 + digits.length());
             } else {
+              self.retrace();
               for i in 0..<4 {
                 let c = self.ch();
                 if (not(c is ('0'..='9' | 'a'..='f' | 'A'..='F'))) {

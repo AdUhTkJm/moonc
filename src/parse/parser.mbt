@@ -555,6 +555,7 @@ pub fn Parser::fstr(self: Parser, str_: String) -> AST {
           let unicode = parse_hex(digits, loc);
           current.push(Int::unsafe_to_char(unicode));
         } else {
+          pos -= 1;
           for i in 0..<4 {
             let c = ch();
             if (not(c is ('0'..='9' | 'a'..='f' | 'A'..='F'))) {

@@ -1,0 +1,34 @@
+name: Parser Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-parser:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout moonc
+      uses: actions/checkout@v4
+
+    - name: Checkout moonbit core library
+      uses: actions/checkout@v4
+      with:
+        repository: moonbitlang/core
+        path: mbtcorelib
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+    
+    - name: Set up Moonbit
+      run: curl -fsSL https://cli.moonbitlang.cn/install/unix.sh | bash
+
+    - name: Run parser tests
+      run: |
+        source ~/.bashrc
+        python3 .github/scripts/ci_parser.py
