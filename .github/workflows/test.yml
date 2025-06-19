@@ -1,34 +1,54 @@
-name: Parser Test
+name: check-parser
 
 on:
+  workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
+      
   pull_request:
-    branches: [ main ]
 
 jobs:
-  test-parser:
-    runs-on: ubuntu-latest
-
+  check:
+    strategy:
+      matrix:
+        version: [stable,pre-release,bleeding]
+        os:
+          - name: ubuntu-latest
+            triple: x86_64-linux-gnu
+          - name: macos-latest
+            triple: arm64-apple-darwin
+          - name: macos-13
+            triple: x86_64-apple-darwin
+          - name: windows-latest
+            triple: x86_64-w64-mingw32
+          
+      fail-fast: false
+    runs-on: ${{ matrix.os.name }}
+    continue-on-error: false
     steps:
-    - name: Checkout moonc
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      
+      - name: setup moon
+        uses: illusory0x0/setup-moonbit@v0.1.0
+        with: 
+          version: ${{ matrix.version }}
 
-    - name: Checkout moonbit core library
-      uses: actions/checkout@v4
-      with:
-        repository: moonbitlang/core
-        path: mbtcorelib
+      - name: install module dependencies
+        run: |
+          moon update
+          moon install
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.x'
-    
-    - name: Set up Moonbit
-      run: curl -fsSL https://cli.moonbitlang.cn/install/unix.sh | bash
+      - name: moon check
+        run: moon check --deny-warn
 
-    - name: Run parser tests
-      run: |
-        source ~/.bashrc
-        python3 .github/scripts/ci_parser.py
+      - name: setup msvc
+        if: ${{ matrix.os.name == 'windows-latest' }}
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: test
+        run: |
+          cd $GITHUB_WORKSPACE
+          python3 .github/scripts/ci_parser.py

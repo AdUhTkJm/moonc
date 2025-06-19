@@ -1,20 +1,25 @@
 import subprocess
 import sys
-import os
 from pathlib import Path
 
 home = Path.home()
 
-def check_file(file_path):
+def check_file(file_path: Path):
   print(f"checking {file_path}")
   result = subprocess.run(
-    [f"{home}/.moon/bin/moon", "run", "src/test", str(file_path)],
+    [f"{home}/.moon/bin/moon", "run", "src/test", str(file_path.resolve())],
     stdout=subprocess.PIPE,
-    stderr=subprocess.STDOUT,
+    stderr=subprocess.PIPE,
     text=True
   )
   if "error:" in result.stdout or result.returncode != 0:
     print(f"\033[0;31merror:\033[0m {file_path} failed to parse")
+    print(f"return code: {result.returncode}")
+    for line in result.stdout.splitlines():
+      if "error:" in line:
+        print("first error line:", line)
+        break
+    print("stderr:\n", result.stderr)
     return False
 
   return True
