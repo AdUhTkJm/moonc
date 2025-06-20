@@ -42,6 +42,10 @@ pub fn[K: Eq + Hash, V] Map::iter(self: Map[K, V]) -> Iter[(K, V)] {
   self.inner().iter();
 }
 
+pub fn[K: Eq + Hash, V] Map::keys(self: Map[K, V]) -> Array[K] {
+  self.to_array().map(fn (x) { x.0 })
+}
+
 pub fn[K: Eq + Hash, V] Map::values(self: Map[K, V]) -> Array[V] {
   self.to_array().map(fn (x) { x.1 })
 }

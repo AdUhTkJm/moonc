@@ -1,5 +1,5 @@
 fn builtin(x: String) -> Name {
-  { pack: Some("builtin"), ns: None, name: x }
+  { pack: Some("@builtin"), ns: None, name: x }
 }
 
 pub fn Env::lookup_type(self: Env, name: Name, tyvars: Array[Type]) -> Type {

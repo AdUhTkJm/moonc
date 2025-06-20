@@ -174,6 +174,7 @@ pub fn Parser::expect_ident(self: Parser) -> String {
     }
     tok => {
       @diag.error(tok.loc, tok.loc.advance(tok.len), "expected identifier, but got \{tok.ty}");
+      self.ignore_until([Newline, Semicolon, RBrace]);
       self.expect_ident();
     }
   }
@@ -193,6 +194,7 @@ pub fn Parser::expect_idents(self: Parser) -> String {
     }
     tok => {
       @diag.error(tok.loc, tok.loc.advance(tok.len), "expected identifier, but got \{tok.ty}");
+      self.ignore_until([Newline, Semicolon, RBrace]);
       self.expect_idents();
     }
   }
@@ -1969,7 +1971,8 @@ pub fn Parser::tyvars(self: Parser) -> Array[Typevar] {
 }
 
 ///|
-/// Parses a top-level type declaration:
+/// Parses a top-level type declaration. The `error` controls whether this
+/// is an error type (i.e. `type!` or `suberror`).
 /// 
 /// The modifier `pub(all)` etc. are handled in `toplevel().
 /// 
@@ -1981,13 +1984,14 @@ pub fn Parser::tydecl(self: Parser, vis: Visible, ext: String?, error: Bool) -> 
   let name = unqualified(name);
   let tyvars = self.tyvars();
   let tys = [];
-  if (not(self.check(Newline) || self.check(Semicolon))) {
+  if (not(self.peek().is_any([Newline, Semicolon]))) {
     // Either there's nothing, or there's a single typename.
     tys.push(self.typename());
+  } else {
+    self.semicolon();
   }
 
   let deriving = self.deriving();
-  self.semicolon();
 
   let detail = EnumDetail :: {
     entries: Map::from_array([("__mem", { tys, named: Map::new() })]),
@@ -2074,19 +2078,15 @@ pub fn Parser::trait_fn(self: Parser) -> FnDetail {
       if (is_kwarg && is_opt) {
         @diag.error(loc, self.loc(), "modifiers '~' and '=' cannot appear together")
       }
-      if (self.checks(Colon)) {
-        ty = self.typename();
-      }
+      self.expects(Colon);
+      ty = self.typename();
     } else {
       ty = self.typename();
     }
     
     if (is_kwarg) {
-      let mut default = None;
-      if (self.checks(Assign)) {
-        default = Some(self.exprs());
-      }
-      kwargs.push({ name: argname, ty, default });
+      // No assignment (default value) is allowed.
+      kwargs.push({ name: argname, ty, default: None });
     } else if (is_opt) {
       kwargs.push({ name: argname, ty: Option(ty), default: None });
     } else {
@@ -2101,17 +2101,21 @@ pub fn Parser::trait_fn(self: Parser) -> FnDetail {
     i = i + 1;
   }
   
-  // Check the optional return type.
+  // The return type is not optional.
   let mut retTy = Type::Unknown;
-  if (self.checks(Arrow)) {
-    retTy = self.typename();
+  self.expects(Arrow);
+  retTy = self.typename();
+
+  // This function has a default implementation.
+  let mut body = AST::leaf();
+  if (self.checks(Assign) && self.peeks().ty is Ident("_")) {
+    self.advance();
+    body = AST::new(FFIBody("_"), Loc::unknown(), Loc::unknown())
   }
 
   let ty = Function(argTys, retTy);
-  let body = AST::new(Block([]), Loc::unknown(), Loc::unknown());
   return { vis: Priv, name, params, tyvars, body, ty, kwargs, ext: None };
 }
-
 
 ///|
 /// Parses a trait declaration.
@@ -2121,6 +2125,13 @@ pub fn Parser::traitdecl(self: Parser, vis: Visible) -> AST {
   self.strip();
   let name = unqualified(self.expect_typename());
   let tyvars = self.tyvars();
+  let extends = [];
+  if (self.checks(Colon)) {
+    extends.push(self.qualified_typename());
+    while (self.checks(Plus)) {
+      extends.push(self.qualified_typename());
+    }
+  }
   let funcs = [];
   self.expects(LBrace);
   while (not(self.checks(RBrace)) && not(self.eof())) {
@@ -2132,7 +2143,7 @@ pub fn Parser::traitdecl(self: Parser, vis: Visible) -> AST {
     self.strip();
   }
 
-  let detail = TraitDetail :: { vis, name, tyvars, funcs };
+  let detail = TraitDetail :: { vis, name, tyvars, funcs, extends };
   AST::new(TraitDecl(detail), from, self.loc());
 }
 
@@ -2158,7 +2169,7 @@ pub fn Parser::toplevel(self: Parser, vis: Visible, ext: String?) -> AST {
     Let => self.globaldecl(vis, ext);
     Const => self.constdecl(vis, ext);
     Impl => self.impldecl(vis, ext);
-    EOF => AST::new(Leaf, Loc::unknown(), Loc::unknown());
+    EOF => AST::leaf();
     Newline | Semicolon => self.toplevel(vis, ext);
     Fnalias => noext((vis) => self.aliasfn(vis));
     Typealias => noext((vis) => self.aliasty(vis));
@@ -2218,7 +2229,7 @@ pub fn Parser::toplevel_block(self: Parser) -> AST {
 /// 
 pub fn Parser::parse(self: Parser) -> AST {
   if self.data.length() == 0 {
-    return AST::new(Leaf, Loc::unknown(), Loc::unknown())
+    return AST::leaf()
   }
   let top = self.toplevel_block();
   return top.tidy();

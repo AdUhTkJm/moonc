@@ -157,6 +157,7 @@ pub(all) struct TraitDetail {
   name: Name
   funcs: Array[FnDetail]
   tyvars: Array[Typevar]
+  extends: Array[Name]
 }
 
 pub impl Show for StructEntry with to_string(self) -> String {
@@ -508,7 +509,7 @@ fn dep_str(ast: AST, depth: Int) -> String {
     Byte(vb) => "\{vb}"
     ByteStr(vs) => "\{vs}"
     Fstr(vs) => "\"\{escapef(vs, depth)}\""
-    FFIBody(ffi) => "= \{ffi}"
+    FFIBody(ffi) => "= \"\{ffi}\""
     Arr(arr) => {
       let s = arr.map(fn (x) { dep_str(x, depth) }).join(", ");
       "[\{s}]"
@@ -595,9 +596,10 @@ fn dep_str(ast: AST, depth: Int) -> String {
     }
     TraitDecl(detail) => {
       let strs = [];
-      let { name, vis, funcs, tyvars } = detail;
+      let { name, vis, funcs, tyvars, extends } = detail;
       let tyvars = if (tyvars.is_empty()) { "" } else { let s = tyvars.map(Typevar::to_string).join(", "); "[\{s}]" };
       let visible = if (vis == Priv) { "" } else { "\{vis} " };
+      let extends = if (extends.is_empty()) { "" } else { let s = extends.map(Name::to_string).join(" + "); " : \{s}"}
       for i in funcs {
         let { name, params, tyvars, ty, kwargs, .. } = i;
         let params = if (["main", "init"].contains(name.name)) {
@@ -622,7 +624,7 @@ fn dep_str(ast: AST, depth: Int) -> String {
       }
       let indent = String::make(@math.maximum(2 * depth - 2, 0), ' ');
       let body = strs.join("  \{indent}\n");
-      "\{visible}trait\{tyvars} \{name} {\n  \{indent}\{body}\n\{indent}}"
+      "\{visible}trait\{tyvars}\{extends} \{name} {\n  \{indent}\{body}\n\{indent}}"
     }
     EnumDecl(detail) => {
       let { name, entries, tyvars, deriving, vis, error: _, ext } = detail;
@@ -855,4 +857,8 @@ pub fn AST::weaken(self: AST) -> AST {
 
 pub fn AST::tidy(self: AST) -> AST {
   self.remove_leaf().weaken();
+}
+
+pub fn AST::leaf() -> AST {
+  AST::new(Leaf, Loc::unknown(), Loc::unknown())
 }

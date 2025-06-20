@@ -75,7 +75,7 @@ pub fn Env::empty() -> Env {
     _traits: Map::new(),
     curr_fn: None,
     curr_for: None,
-    ast: AST::new(Leaf, Loc::unknown(), Loc::unknown())
+    ast: AST::leaf()
   }
 }
 
@@ -129,7 +129,7 @@ pub fn Env::load(self: Env, detail: PackDetail) -> Unit {
       params: _fn.params,
       kwargs: _fn.kwargs,
       tyvars: _fn.tyvars,
-      ty: _fn.ty, 
+      ty: _fn.ty.resolve_self(_fn.name.ns), 
     };
   }
   for _enum in _enums {
@@ -144,5 +144,6 @@ pub fn Env::load(self: Env, detail: PackDetail) -> Unit {
     let name = _trait.name.pack(referred);
     self._traits[name] = { .._trait, name };
   }
+  println(self._fns.keys());
   // TODO: impls
 }

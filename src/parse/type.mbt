@@ -140,3 +140,15 @@ pub fn Type::name(self: Type) -> Option[Name] {
     VirtualBase(x) => x.name()
   }
 }
+
+pub fn Type::resolve_self(self: Type, ns: String?) -> Type {
+  if (ns is None) {
+    return self;
+  }
+  guard ns is Some(ns);
+  self.map((ty) => match ty {
+    Named({ name: "Self", pack, ns: None }, args) =>
+      Named({ name: ns, pack, ns: None }, args)
+    c => c
+  });
+}
