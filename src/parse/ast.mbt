@@ -349,7 +349,7 @@ pub(all) enum Type {
   Unknown
   Long
   Weak(Ref[Type])
-  MayError(Type, Type)
+  MayError(Type)
   HasError(Type, Type)
   Error
 }
@@ -508,7 +508,7 @@ pub impl Show for Type with to_string(self) -> String {
     }
     Typevar(v) => "\{v}"
     HasError(x, y) => "(\{x} raise \{y})"
-    MayError(x, y) => "(\{x}?\{y})"
+    MayError(x) => "(\{x} raise?)"
   }
 }
 
@@ -814,7 +814,7 @@ fn dep_str(ast: AST, depth: Int) -> String {
       "guard \{cond}\{other}"
     }
     Test(name, body) => {
-      let name = name.map_or("", fn (x) { " \{x}" });
+      let name = name.map_or("", fn (x) { " \"\{x}\"" });
       "test\{name} \{dep_str(body, depth)}"
     }
   }
@@ -920,7 +920,7 @@ pub fn Type::map(self: Type, f: (Type) -> Type) -> Type {
     Named(name, arr) => Named(name, arr.map(mapper))
     Weak(x) => Weak({ val: x.val.map(f) })
     HasError(x, y) => HasError(x.map(f), y.map(f))
-    MayError(x, y) => MayError(x.map(f), y.map(f))
+    MayError(x) => MayError(x.map(f))
     Unknown | Int | Double | Float |
     Char | Bool | Typevar(_) | Unit |
     String | Error | Long => self

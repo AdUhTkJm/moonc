@@ -1,3 +1,8 @@
+///|
+/// Type of int literal. Here `len` is the number of bits inside the int.
+/// 
+/// For bigint with arbitrary precision, we use `len = -1`.
+/// 
 pub(all) struct IntTy {
   len: Int
   signed: Bool
@@ -7,7 +12,7 @@ pub(all) enum TokenType {
   // Literals
   Ident(String)         // [a-z_][\w_\d]*
   Typename(String)      // [A-Z][\w_\d]*
-  Int(BigInt,IntTy)  // [\d]+
+  Int(BigInt,IntTy)     // [\d]+
   Double(Double,String) // Double literal, along with the original string
   Float(Float)          // Float literal
   Str(String)           // "[^"]*"

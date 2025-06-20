@@ -282,6 +282,8 @@ pub fn Parser::basetype(self: Parser) -> Type {
 ///|
 /// Parses postfixes `?` and `[T]` (as type arguments).
 /// 
+/// The postfix `raise?` is also parsed here.
+/// 
 pub fn Parser::postfix_type(self: Parser) -> Type {
   let from = self.peek().loc;
   let mut ty = self.basetype();
@@ -303,6 +305,7 @@ pub fn Parser::postfix_type(self: Parser) -> Type {
       @diag.error(from, self.loc(), "builtin type \{ty} does not accept parameters");
     }
   }
+
   while (self.check(Ques)) {
     // Think of Unit?????Error, which is ((Unit????) ? Error).
     if (self.peek().isa(Typename(""))) {
@@ -310,6 +313,13 @@ pub fn Parser::postfix_type(self: Parser) -> Type {
       break;
     }
     ty = Option(ty);
+  }
+
+  if (self.check(Raise)) {
+    if (not(self.check(Ques))) {
+      self.retrace();
+    }
+    ty = MayError(ty);
   }
   return ty;
 }
@@ -323,7 +333,12 @@ pub fn Parser::binary_type(self: Parser) -> Type {
     let tok = self.consume();
     let next = self.basetype(); // No post-fix allowed.
     ty = match tok.ty {
-      Ques => MayError(ty, next)
+      Ques => {
+        if (not(next is Error)) {
+          @diag.error(tok.loc, self.loc(), "expected '?Error'");
+        }
+        MayError(ty)
+      }
       Bang | Raise => HasError(ty, next)
       _ => panic();
     }
@@ -598,6 +613,7 @@ pub fn Parser::fstr(self: Parser, str_: String) -> AST {
       'n'  => current.push('\n')
       't'  => current.push('\t')
       'r'  => current.push('\r')
+      'b'  => current.push('\b')
       '\\' => current.push('\\')
       '"'  => current.push('"')
       '\'' => current.push('\'')
@@ -804,7 +820,6 @@ pub fn Parser::primary(self: Parser) -> AST {
   let from = self.peek().loc;
   let tok = self.consume();
   match (tok.ty) {
-    Ident(name) => AST::new(VarRef(self.unqualified(name)), from, self.loc());
     Int(vi, ty) => AST::new(Int(vi, ty), from, self.loc());
     Double(vd, _) => AST::new(Double(vd), from, self.loc());
     Float(vf) => AST::new(Float(vf), from, self.loc());
@@ -815,7 +830,62 @@ pub fn Parser::primary(self: Parser) -> AST {
     Char(vc) => AST::new(Char(vc), from, self.loc());
     Byte(vb) => AST::new(Byte(vb), from, self.loc());
     ByteStr(vs) => AST::new(ByteStr(vs), from, self.loc());
+    Ident(name) => {
+      // A function.
+      if (self.checks(Arrrow)) {
+        let body = self.exprs();
+        let detail = FnDetail :: {
+          vis: Priv, name: self.unqualified("__lambda_\{@utils.count()}"),
+          params: [name], tyvars: [], kwargs: [],
+          body, ty: Function([Unknown], Unknown), ext: None
+        }
+        return AST::new(FnDecl(detail), from, self.loc());
+      }
+
+      AST::new(VarRef(self.unqualified(name)), from, self.loc());
+    }
     LPar => {
+      let old = self.place;
+      let mut good = true;
+      // Try to identify a parameter list.
+      let params = [];
+      let argTys = [];
+
+      while (not(self.checks(RPar)) && not(self.eof())) {
+        if (self.peeks().ty is Ident(w)) {
+          self.advance();
+          let argname = w;
+          let mut ty = Type::Unknown;
+          if (self.checks(Colon)) {
+            ty = self.typename();
+          }
+          params.push(argname);
+          argTys.push(ty);
+        } else {
+          good = false;
+          break;
+        }
+
+        if (not(self.peeks().isa(RPar)) && not(self.check(Comma))) {
+          good = false;
+          break;
+        }
+      }
+      
+      if (good && self.checks(Arrrow)) {
+        let body = self.exprs();
+        let detail = FnDetail :: {
+          vis: Priv, name: self.unqualified("__lambda_\{@utils.count()}"),
+          params, tyvars: [], kwargs: [],
+          body, ty: Function(argTys, Unknown), ext: None
+        }
+        return AST::new(FnDecl(detail), from, self.loc());
+      }
+
+      // Failure: not parameter list.
+      // Try determine whether this is a unit, tuple or grouping.
+      self.place = old;
+
       let exprs = [];
       while (not(self.checks(RPar)) && not(self.eof())) {
         exprs.push(self.expr());
@@ -823,6 +893,7 @@ pub fn Parser::primary(self: Parser) -> AST {
           self.expects(Comma);
         }
       }
+
       if (exprs.is_empty()) {
         AST::new(Unit, from, self.loc())
       } else if (exprs.length() == 1) {
@@ -955,7 +1026,7 @@ pub fn Parser::primary(self: Parser) -> AST {
       }
     }
     _ => {
-      @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected token \{tok.ty}");
+      @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected \{tok.ty}");
       self.ignore_until([Semicolon, Let, RBrace, Newline]);
       AST::new(Leaf, tok.loc, tok.loc);
     }
@@ -1018,6 +1089,12 @@ pub fn Parser::postfix(self: Parser) -> AST {
             kwargs[v.name] = expr;
           } else {
             @diag.error(expr.from, self.loc(), "a name is expected to precede '~' as named argument");
+          }
+        } else if (self.checks(Ques)) {
+          if (expr.kind is VarRef(v) && v.pack is None && v.ns is None) {
+            kwargs[v.name] = expr;
+          } else {
+            @diag.error(expr.from, self.loc(), "a name is expected to precede '?' as optional argument");
           }
         } else {
           args.push(expr);
@@ -1111,7 +1188,7 @@ pub fn Parser::mul(self: Parser) -> AST {
       _ => panic()
     }
     self.strip();
-    let x = self.postfix();
+    let x = self.prefix();
     n = AST::new(Binary(kind, n, x), from, self.loc());
   }
   return n;
@@ -1269,7 +1346,8 @@ pub fn Parser::range(self: Parser) -> AST {
 pub fn Parser::pipe(self: Parser) -> AST {
   let from = self.peek().loc;
   let mut n = self.range();
-  while (self.check(Pipe)) {
+  // Pipe is allowed to appear on a new line.
+  while (self.checks(Pipe)) {
     let x = self.range();
     if (x.kind is Call(func, w, kwargs)) {
       n = AST::new(Call(func, [n, ..w], kwargs), from, self.loc());
@@ -1755,6 +1833,9 @@ pub fn Parser::qualified_name(self: Parser) -> Name {
   let mut pack = None;
   if (self.peek().ty is Packname(x)) {
     pack = Some(x);
+    self.advance();
+    self.expects(Dot);
+    self.strip();
   }
   let name = self.expect_ident();
   let mut name = self.unqualified(name);
@@ -1802,7 +1883,20 @@ pub fn Parser::impldecl(self: Parser, vis: Visible, ext: String?) -> AST {
     retTy = self.typename();
   }
 
-  let body = self.block();
+  let body = if (self.checks(Assign)) {
+    // An FFI body.
+    let tok = self.consumes();
+    let endloc = tok.loc.advance(tok.len);
+    match tok.ty {
+      Str(w) | RawStr(w) => AST::new(FFIBody(w), tok.loc, endloc)
+      _ => {
+        @diag.error(tok.loc, endloc, "expected a string literal as external function name");
+        AST::new(Leaf, tok.loc, endloc);
+      }
+    }
+  } else {
+    self.block();
+  }
   // FnDecl only records its return type;
   // the function type can be inferred from `args`.
   let detail = ImplDetail :: {
@@ -1868,17 +1962,7 @@ pub fn Parser::tydecl(self: Parser, vis: Visible, ext: String?, error: Bool) -> 
   let name = self.unqualified(name);
   let tyvars = self.tyvars();
   let tys = [];
-  if (self.checks(LPar)) {
-    while (not(self.checks(RPar)) && not(self.eof())) {
-      tys.push(self.typename());
-      if (not(self.peeks().isa(RPar))) {
-        self.expect(Comma);
-      }
-    }
-    if (tys.length() == 0) {
-      @diag.error(from, self.loc(), "empty enum variant when '()' is present");
-    }
-  } else if (not(self.check(Newline) || self.check(Semicolon))) {
+  if (not(self.check(Newline) || self.check(Semicolon))) {
     // Either there's nothing, or there's a single typename.
     tys.push(self.typename());
   }

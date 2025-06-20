@@ -1,5 +1,4 @@
 pub struct Lexer {
-  mut line: Int
   mut loc: Int
   data: Array[Char]
   filename: String
@@ -8,7 +7,6 @@ pub struct Lexer {
 pub fn Lexer::new(filename: String, code: String) -> Lexer {
   @diag.add_file(filename, code);
   return {
-    line: 0,
     loc: 0,
     data: (code + "\n\u0000").to_array(),
     filename: filename
@@ -101,14 +99,12 @@ fn parse_bigint(digits: Array[Char], base: Int) -> BigInt {
   if (base == 16) {
     return BigInt::from_hex(x);
   }
-  if (base == 8) {
-    let mut result = BigInt::from_int(0);
-    for i in digits {
-      result = result * 8 + BigInt::from_int(i.to_int() - 48)
-    }
-    return result;
+  let base = BigInt::from_int(base);
+  let mut result = BigInt::from_int(0);
+  for i in digits {
+    result = result * base + BigInt::from_int(i.to_int() - 48)
   }
-  panic();
+  return result;
 }
 
 fn de_escape(loc: Loc, str_: String) -> String {
@@ -132,6 +128,7 @@ fn de_escape(loc: Loc, str_: String) -> String {
       'n'  => current.push('\n')
       't'  => current.push('\t')
       'r'  => current.push('\r')
+      'b'  => current.push('\b')
       '\\' => current.push('\\')
       '"'  => current.push('"')
       '\'' => current.push('\'')
@@ -549,7 +546,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
       let name = String::from_array(name)
       Token::new(Attribute(name), loc, name.length());
     }
-    '\n' => { self.line += 1; Token::new(Newline, loc.advance(-1), 0) }
+    '\n' => { Token::new(Newline, loc.advance(-1), 0) }
     ' ' | '\r' | '\t' => self.next()
     '0'..='9' => {
       let mut base = 10;
@@ -560,8 +557,10 @@ pub fn Lexer::next(self: Lexer) -> Token {
         base = 16;
 
         digits.clear(); // Remove '0x'
-        for c = self.ch(); c is ('0'..='9' | 'a'..='f' | 'A'..='F'); c = self.ch() {
-          digits.push(c);
+        for c = self.ch(); c is ('0'..='9' | 'a'..='f' | 'A'..='F' | '_'); c = self.ch() {
+          if (c != '_') {
+            digits.push(c);
+          }
         }
         self.retrace();
         let mut fp = false;
@@ -602,23 +601,38 @@ pub fn Lexer::next(self: Lexer) -> Token {
           return Token::new(Double(vf, String::from_array(digits)), loc, digits.length());
         }
         // fallthrough to suffix parsing
-      } else if (next == 'o') {
+      } else if (c == '0' && next == 'o') {
         base = 8;
 
         digits.clear(); // Remove '0o'
-        for c = self.ch(); c is ('0'..='7'); c = self.ch() {
-          digits.push(c);
+        for c = self.ch(); c is ('0'..='7' | '_'); c = self.ch() {
+          if (c != '_') {
+            digits.push(c);
+          }
         }
         self.retrace();
         // No floating point possible.
         // fallthrough to suffix parsing
+      } else if (c == '0' && next == 'b') {
+        base = 2;
+
+        digits.clear(); // Remove '0b'
+        for c = self.ch(); c is ('0'..='7' | '_'); c = self.ch() {
+          if (c != '_') {
+            digits.push(c);
+          }
+        }
+        self.retrace();
+        // No floating point possible.
       } else {
         let mut fp = next is ('.' | 'e' | 'E');
 
         if (not(fp) && next is ('0'..='9')) {
           digits.push(next);
-          for c = self.ch(); c is ('0'..='9'); c = self.ch() {
-            digits.push(c);
+          for c = self.ch(); c is ('0'..='9' | '_'); c = self.ch() {
+            if (c != '_') {
+              digits.push(c);
+            }
           }
         }
 
@@ -660,6 +674,13 @@ pub fn Lexer::next(self: Lexer) -> Token {
           let vf = parse_double(digits, loc);
           return Token::new(Double(vf, String::from_array(digits)), loc, digits.length());
         }
+      }
+
+      // Suffix N for bigint
+      if (self.peek(0) == 'n' || self.peek(0) == 'N') {
+        self.ch() |> ignore;
+        let vi = BigInt::from_string(String::from_array(digits));
+        return Token::new(Int(vi, { signed: true, len: -1 }), loc, digits.length());
       }
 
       // Suffix U for unsigned

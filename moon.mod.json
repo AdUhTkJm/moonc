@@ -1,6 +1,6 @@
 {
   "name": "AdUhTkJm/moonc",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "deps": {
     "Yoorkin/ArgParser": "0.1.9",
     "moonbitlang/x": "0.4.28"
