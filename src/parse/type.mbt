@@ -1,0 +1,138 @@
+pub(all) enum Type {
+  Named(Name, Array[Type])
+  Struct(Name, Array[Type])
+  Enum(Name, Array[Type])
+  FixedArray(Type)
+  Function(Array[Type], Type)
+  Tuple(Array[Type])
+  Typevar(Typevar)
+  Int
+  Float
+  Unit
+  Double
+  String
+  Bool
+  Char
+  Option(Type)
+  Unknown
+  Long
+  Weak(Ref[Type])
+  MayError(Type)
+  HasError(Type, Type)
+  Error
+}
+pub impl Show for Type with to_string(self) -> String {
+  match (self) {
+    Int => "Int"
+    Double => "Double"
+    Float => "Float"
+    Unit => "Unit"
+    Bool => "Bool"
+    Char => "Char"
+    String => "String"
+    Error => "Error"
+    Long => "Long"
+    Named(x, []) | Struct(x, []) | Enum(x, []) => x.to_string()
+    Named(x, arr) | Struct(x, arr) | Enum(x, arr) => {
+      let s = arr.map(Type::to_string).join(", ")
+      "\{x}[\{s}]"
+    }
+    FixedArray(x) => "FixedArray[\{x}]"
+    Weak(x) => "'weak(\{x.val})"
+    Unknown => "?"
+    Tuple(arr) => {
+      let s = arr.map(Type::to_string).join(", ")
+      "(\{s})"
+    }
+    Option(x) => "\{x}?"
+    Function(args, ret) => {
+      let s = args.map(Type::to_string).join(", ")
+      "((\{s}) -> \{ret})"
+    }
+    Typevar(v) => "\{v}"
+    HasError(x, y) => "(\{x} raise \{y})"
+    MayError(x) => "(\{x} raise?)"
+  }
+}
+
+pub impl Show for Type with output(self, writer) -> Unit {
+  writer.write_string(self.to_string());
+}
+
+pub fn Type::map(self: Type, f: (Type) -> Type) -> Type {
+  let mapper = (x: Type) => { x.map(f) }
+  f(match self {
+    Option(x) => Option(x.map(f))
+    Tuple(arr) => Tuple(arr.map(mapper))
+    Function(args, ret) => Function(args.map(mapper), ret.map(f))
+    FixedArray(x) => FixedArray(x.map(f))
+    Enum(name, arr) => Enum(name, arr.map(mapper))
+    Struct(name, arr) => Struct(name, arr.map(mapper))
+    Named(name, arr) => Named(name, arr.map(mapper))
+    Weak(x) => Weak({ val: x.val.map(f) })
+    HasError(x, y) => HasError(x.map(f), y.map(f))
+    MayError(x) => MayError(x.map(f))
+    Unknown | Int | Double | Float |
+    Char | Bool | Typevar(_) | Unit |
+    String | Error | Long => self
+  })
+}
+
+///|
+/// Removes all `weak` types, replacing them with their underlying type.
+/// 
+pub fn Type::deweak(self: Type) -> Type {
+  self.map((x) => match x {
+    Weak(x) => x.val;
+    c => c
+  });
+}
+
+///|
+/// Weaken all `Unknown` types to `Weak(Unknown)` for type inference.
+/// 
+pub fn Type::weaken(self: Type) -> Type {
+  self.map((x) => match x {
+    Unknown => Type::weak()
+    c => c
+  })
+}
+
+///|
+/// Constructs a weak type.
+/// 
+pub fn Type::weak() -> Type {
+  Weak(Ref::new(Unknown))
+}
+
+///|
+/// Gets the full name (package, namespace and name) of this type.
+/// 
+pub fn Type::name(self: Type) -> Option[Name] {
+  fn builtin(x) {
+    Some(Name::unqualified(Some("builtin"), x))
+  }
+  match self {
+    Weak(a) => a.val.name()
+    Long => builtin("Long")
+    Char => builtin("Char")
+    String => builtin("String")
+    Double => builtin("Double")
+    Unit => builtin("Unit")
+    Float => builtin("Float")
+    Int => builtin("Int")
+    Bool => builtin("Bool")
+    Unknown => None
+    Option(_) => builtin("Option")
+    Typevar(_) => None
+    Tuple(_) => None
+    Function(_) => None
+    FixedArray(_) => builtin("FixedArray")
+    Enum(x, _) => Some(x)
+    Struct(x, _) => Some(x)
+    Named(x, _) => Some(x)
+    Error => builtin("Error")
+    HasError(x, _) => x.name()
+    MayError(x) => x.name()
+  }
+}

@@ -1,3 +1,7 @@
+fn builtin(x: String) -> Name {
+  { pack: Some("builtin"), ns: None, name: x }
+}
+
 pub fn Env::lookup_type(self: Env, name: Name, tyvars: Array[Type]) -> Type {
   if (self._structs.contains(name)) {
     Struct(name, tyvars)
@@ -8,13 +12,13 @@ pub fn Env::lookup_type(self: Env, name: Name, tyvars: Array[Type]) -> Type {
   }
 }
 
-pub fn Env::new_local(self: Env, x: AST) -> Type {
+pub fn Env::new_local(self: Env, x: AST) -> Unit {
   guard x.kind is VarDecl(detail);
   if (x.ty is Weak(v)) {
     let ty = self.infer(detail.init);
     x.ty = ty; v.val = ty;
     self._locals[detail.name] = { name: detail.name, mutable: detail.mutable, ty }
-    return ty;
+    return;
   }
   if (x.ty is Named(n, tyvars)) {
     let ty = self.lookup_type(n, tyvars);
@@ -22,10 +26,9 @@ pub fn Env::new_local(self: Env, x: AST) -> Type {
       @diag.error(x.from, x.to, "unknown type \{n}")
     }
     self._locals[detail.name] = { name: detail.name, mutable: detail.mutable, ty }
-    return ty;
+    return;
   }
   self._locals[detail.name] = { name: detail.name, mutable: detail.mutable, ty: x.ty }
-  x.ty;
 }
 
 pub fn Env::add_local(self: Env, name: String, ty: Type) -> Unit {
@@ -73,6 +76,16 @@ pub fn unify(x: Type, y: Type, from: Loc, to: Loc) -> Type {
       Tuple(x)
     }
     (FixedArray(x), FixedArray(y)) => unify(x, y, from, to);
+    (Struct(name, arr), Struct(name2, arr2)) => {
+      if (name != name2) {
+        @diag.error(from, to, "structs do not have the same name");
+      } else {
+        for i, v in arr {
+          unify(v, arr2[i], from, to) |> ignore;
+        }
+      }
+      Struct(name, arr)
+    }
     _ => {
       @diag.error(from, to, "cannot unify type \{x} with \{y}");
       Unknown
@@ -107,6 +120,7 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
     VarDecl(detail) => {
       x.ty = unify(x.ty, self.infer(detail.init), x.from, x.to);
       self.new_local(x);
+      Unit
     }
     VarRef(name) => {
       if (name.ns is None && name.pack is None) {
@@ -136,13 +150,12 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       }
     }
     FnDecl(detail) => {
-      let env = self.clone();
+      let env = { ..self.clone(), curr_fn: Some(detail.name) };
       let tys = if (x.ty is Function(tys, _)) { tys } else { [] };
       fn get(i) { if (i >= tys.length()) { Type::Unknown } else { tys[i] } }
       detail.params.eachi(fn (i, param) {
         env.add_local(param, get(i))
       });
-      env.curr_fn = Some(detail.name);
       guard self._fns[detail.name].ty is Function(_, ret);
       unify(ret, env.infer(detail.body), x.from, x.to) |> ignore;
       x.ty
@@ -190,27 +203,119 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       }
     }
     For(starts, stop, steps, body, exit) => {
+      let env = { ..self.clone(), curr_for: Some(x) };
       let vars = Set::new();
       for init in starts {
         let (_var, init) = init;
         vars.add(_var);
-        self.add_local(_var, self.infer(init));
+        env.add_local(_var, self.infer(init));
       }
-      unify(self.infer(stop), Bool, stop.from, stop.to) |> ignore;
+      unify(env.infer(stop), Bool, stop.from, stop.to) |> ignore;
       for step in steps {
         let (_var, init) = step;
         if (not(vars.contains(_var))) {
           @diag.error(init.from, init.to, "unknown induction variable: \{_var}");
         } else {
-          init.ty = unify(self._locals[_var].ty, self.infer(init), init.from, init.to);
+          init.ty = unify(env._locals[_var].ty, env.infer(init), init.from, init.to);
         }
       }
-      body.ty = unify(self.infer(body), Unit, body.from, body.to);
+      body.ty = unify(env.infer(body), Unit, body.from, body.to);
       // TODO: break-carried result
       if (exit is Some(exit)) {
-        exit.ty = self.infer(exit);
+        exit.ty = env.infer(exit);
       }
       Unit
+    }
+    ForIn(vars, list, body, exit) => {
+      if (vars.length() >= 3) {
+        @diag.error(x.from, x.to, "for .. in supports at most 2 variables");
+        return Unit;
+      }
+
+      // Work out the type of variables.
+      let env = { ..self.clone(), curr_for: Some(x) };
+      let lty = self.infer(list);
+      let lname = lty.name();
+      if (lname is None) {
+        @diag.error(list.from, list.to, "must have a proper iter() method");
+        return Unit;
+      }
+
+      guard lname is Some(lname);
+      let mut good = true;
+      if (vars.length() == 1) {
+        if (self.method_ty(lname, "iter") is Some(Function(args, ret)) && args.length() == 1) {
+          unify(args[0], lty, list.from, list.to) |> ignore;
+          let t = Type::weak();
+          let itert: Type = Enum(builtin("Iter"), [t]);
+          unify(ret, itert, list.from, list.to) |> ignore;
+          env.add_local(vars[0], t.deweak());
+        } else {
+          good = false;
+          @diag.error(list.from, list.to, "must have a proper iter() method");
+        }
+      }
+      if (vars.length() == 2) {
+        if (self.method_ty(lname, "iter2") is Some(Function(args, ret)) && args.length() == 1) {
+          unify(args[0], lty, list.from, list.to) |> ignore;
+          let p = Type::weak();
+          let q = Type::weak();
+          let iter2: Type = Enum(builtin("Iter2"), [p, q]);
+          unify(ret, iter2, list.from, list.to) |> ignore;
+          env.add_local(vars[0], p);
+          env.add_local(vars[1], q);
+        } else {
+          good = false;
+          @diag.error(list.from, list.to, "must have a proper iter() method");
+        }
+      }
+
+      // Infer body.
+      if (good) {
+        let _ = env.infer(body);
+        if (exit is Some(exit)) {
+          exit.ty = env.infer(exit);
+        }
+      }
+
+      Unit
+    }
+    Continue(arr) => {
+      // Continue skips the `steps` parts.
+      if (self.curr_for is None) {
+        @diag.error(x.from, x.to, "continue found outside loop");
+        return Unit;
+      }
+      let mut tys = [];
+      if (self.curr_for is Some({ kind: For(starts, _, _, _, _), ..})) {
+        tys = starts.map(x => self._locals[x.0].ty);
+      } else if (self.curr_for is Some({ kind: ForIn(starts, _, _, _), .. }) ) {
+        println(x);
+        tys = starts.map(x => self._locals[x].ty)
+      }
+
+      if (arr.length() > tys.length()) {
+        @diag.error(x.from, x.to, "continue has more results than needed");
+        return Unit;
+      }
+      arr.eachi((i, expr) => {
+        expr.ty = unify(self.infer(expr), tys[i], expr.from, expr.to);
+      });
+      Unit
+    }
+    IncRange(begin, end) | ExcRange(begin, end) => {
+      // Verify `begin` and `end` have the same type.
+      let bty = self.infer(begin);
+      let ety = self.infer(end);
+      unify(bty, ety, x.from, x.to) |> ignore;
+
+      // They must both be either Int or Int64.
+      let deweak = bty.deweak();
+      if (not(deweak is Int || deweak is Long)) {
+        @diag.error(x.from, x.to, "range expression not supported for this type");
+      }
+
+      Struct(builtin("Iter"), [Int]);
     }
     // View(_) => ...
     // Fnalias(_) => ...
@@ -218,14 +323,10 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
     // TupleAccess(_) => ...
     // Is(_) => ...
     // ArrAccess(_) => ...
-    // ExcRange(_) => ...
-    // IncRange(_) => ...
     // Match(_) => ...
-    // ForIn(_) => ...
     // For(_) => ...
     // While(_) => ...
     // Break(_) => ...
-    // Continue(_) => ...
     // Arr(_) => ...
     // Fstr(_) => ...
     // ThisCall(_) => ...
@@ -242,7 +343,10 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
     // StructInit(_) => ...
     // StructDecl(_) => ...
     // ImplDecl(_) => ...
-    _ => panic()
+    _ => {
+      println(x);
+      panic()
+    }
   }
   x.ty = ty;
   ty

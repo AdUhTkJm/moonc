@@ -330,30 +330,6 @@ pub(all) enum ASTType {
   Leaf
 }
 
-pub(all) enum Type {
-  Named(Name, Array[Type])
-  Struct(Name, Array[Type])
-  Enum(Name, Array[Type])
-  FixedArray(Type)
-  Function(Array[Type], Type)
-  Tuple(Array[Type])
-  Typevar(Typevar)
-  Int
-  Float
-  Unit
-  Double
-  String
-  Bool
-  Char
-  Option(Type)
-  Unknown
-  Long
-  Weak(Ref[Type])
-  MayError(Type)
-  HasError(Type, Type)
-  Error
-}
-
 pub(all) struct AST {
   kind: ASTType
   from: @diag.Loc
@@ -475,44 +451,6 @@ pub impl Show for Name with to_string(self) -> String {
 }
 
 pub impl Show for Name with output(self, writer) -> Unit {
-  writer.write_string(self.to_string());
-}
-
-pub impl Show for Type with to_string(self) -> String {
-  match (self) {
-    Int => "Int"
-    Double => "Double"
-    Float => "Float"
-    Unit => "Unit"
-    Bool => "Bool"
-    Char => "Char"
-    String => "String"
-    Error => "Error"
-    Long => "Long"
-    Named(x, []) | Struct(x, []) | Enum(x, []) => x.to_string()
-    Named(x, arr) | Struct(x, arr) | Enum(x, arr) => {
-      let s = arr.map(Type::to_string).join(", ")
-      "\{x}[\{s}]"
-    }
-    FixedArray(x) => "FixedArray[\{x}]"
-    Weak(x) => "'weak(\{x.val})"
-    Unknown => "?"
-    Tuple(arr) => {
-      let s = arr.map(Type::to_string).join(", ")
-      "(\{s})"
-    }
-    Option(x) => "\{x}?"
-    Function(args, ret) => {
-      let s = args.map(Type::to_string).join(", ")
-      "((\{s}) -> \{ret})"
-    }
-    Typevar(v) => "\{v}"
-    HasError(x, y) => "(\{x} raise \{y})"
-    MayError(x) => "(\{x} raise?)"
-  }
-}
-
-pub impl Show for Type with output(self, writer) -> Unit {
   writer.write_string(self.to_string());
 }
 
@@ -842,8 +780,7 @@ fn[K: Eq + Hash] cvt(map: Map[K, AST], f: (AST) -> AST) -> Map[K, AST] {
 
 pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
   let mapper = (x: AST) => x.map(f)
-  f({ ..self, kind:
-  match self.kind {
+  f({ ..self, kind: match self.kind {
     FnDecl(detail) => FnDecl({ ..detail, body: detail.body.map(f), kwargs: detail.kwargs.map(fn (x) { { ..x, default: x.default.map(mapper) } }) })
     ImplDecl(detail) => ImplDecl({ ..detail, body: detail.body.map(f) })
     VarDecl(detail) => VarDecl({ ..detail, init: detail.init.map(f) })
@@ -901,46 +838,21 @@ pub fn AST::remove_leaf(self: AST) -> AST {
 }
 
 pub fn AST::weaken(self: AST) -> AST {
-  self.map((ast) => { ..ast, ty: ast.ty.weaken() });
+  self.map((ast) => { ..ast,
+    ty: ast.ty.weaken(),
+    kind: match ast.kind {
+      FnDecl(detail) => FnDecl({ ..detail, ty: detail.ty.weaken() })
+      GlobalDecl(detail) => GlobalDecl({ ..detail, ty: detail.ty.weaken() })
+      ImplDecl(detail) => ImplDecl({ ..detail, ty: detail.ty.weaken() })
+      VarDecl(detail) => VarDecl({ ..detail, ty: detail.ty.weaken() })
+      TupleDecl(a, b, ty) => TupleDecl(a, b, ty.weaken())
+      StructLet(a, b, ty) => StructLet(a, b, ty.weaken())
+      EnumLet(a, b, ty) => EnumLet(a, b, ty.weaken())
+      c => c
+    }
+  });
 }
 
 pub fn AST::tidy(self: AST) -> AST {
   self.remove_leaf().weaken();
-}
-
-pub fn Type::map(self: Type, f: (Type) -> Type) -> Type {
-  let mapper = (x: Type) => { x.map(f) }
-  f(match self {
-    Option(x) => Option(x.map(f))
-    Tuple(arr) => Tuple(arr.map(mapper))
-    Function(args, ret) => Function(args.map(mapper), ret.map(f))
-    FixedArray(x) => FixedArray(x.map(f))
-    Enum(name, arr) => Enum(name, arr.map(mapper))
-    Struct(name, arr) => Struct(name, arr.map(mapper))
-    Named(name, arr) => Named(name, arr.map(mapper))
-    Weak(x) => Weak({ val: x.val.map(f) })
-    HasError(x, y) => HasError(x.map(f), y.map(f))
-    MayError(x) => MayError(x.map(f))
-    Unknown | Int | Double | Float |
-    Char | Bool | Typevar(_) | Unit |
-    String | Error | Long => self
-  })
-}
-
-pub fn Type::deweak(self: Type) -> Type {
-  self.map((x) => match x {
-    Weak(x) => x.val;
-    c => c
-  });
-}
-
-pub fn Type::weaken(self: Type) -> Type {
-  self.map((x) => match x {
-    Unknown => Weak(Ref::new(Unknown))
-    c => c
-  })
-}
-
-pub fn Type::weak() -> Type {
-  Weak(Ref::new(Unknown))
 }

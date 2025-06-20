@@ -625,7 +625,10 @@ pub fn Lexer::next(self: Lexer) -> Token {
         self.retrace();
         // No floating point possible.
       } else {
-        let mut fp = next is ('.' | 'e' | 'E');
+        let mut fp = next is ('.' | 'e' | 'E')
+        if (next == '.' && self.peek(0) == '.') {
+          fp = false;
+        }
 
         if (not(fp) && next is ('0'..='9')) {
           digits.push(next);

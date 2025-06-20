@@ -32,7 +32,7 @@ The `lex` method returns a list of tokens. Each token carries a token type (for 
 Similarly, for parser:
 
 ```mbt
-let parser = @parse.Parser::new(tokens);
+let parser = @parse.Parser::new(filename, tokens);
 let ast = parser.parse();
 let good = @diag.report();
 if (not(good)) {

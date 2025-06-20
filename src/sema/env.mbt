@@ -7,13 +7,13 @@ pub struct LocalDetail {
   name: String
   mutable: Bool
   ty: Type
-}
+} derive(Show)
 
 pub struct GlobalDecl {
   name: Name
   ty: Type
   vis: Visible
-}
+} derive(Show)
 
 pub struct FnDetail {
   name: Name
@@ -21,7 +21,7 @@ pub struct FnDetail {
   tyvars: Array[Typevar]
   vis: Visible
   ty: Type
-}
+} derive(Show)
 
 pub(all) struct Env {
   // These underscores are to avoid Moonbit's VSCode plugin identifying `struct`, `enum` etc too quickly.
@@ -31,15 +31,16 @@ pub(all) struct Env {
   _enums: Map[Name, EnumDetail]
   _globals: Map[Name, GlobalDecl]
   _fns: Map[Name, FnDetail]
-  mut curr_fn: Name?
+  curr_fn: Name?
+  curr_for: AST?
   mut ast: AST
 }
 
 pub fn Env::bind(self: Env, x: AST) -> Unit {
-  x.visit(fn (x) { match x.kind {
+  x.visit(x => { match x.kind {
     GlobalDecl(detail) => self._globals[detail.name] = {
       name: detail.name,
-      ty: x.ty,
+      ty: detail.ty,
       vis: detail.vis
     };
 
@@ -51,7 +52,7 @@ pub fn Env::bind(self: Env, x: AST) -> Unit {
       params: detail.params,
       tyvars: detail.tyvars,
       vis: detail.vis,
-      ty: x.ty
+      ty: detail.ty
     };
     _ => ()
   } });
@@ -66,6 +67,7 @@ pub fn Env::empty() -> Env {
     _enums: Map::new(),
     _fns: Map::new(),
     curr_fn: None,
+    curr_for: None,
     ast: AST::new(Leaf, Loc::unknown(), Loc::unknown())
   }
 }
@@ -85,4 +87,12 @@ pub fn Env::new(x: AST) -> Env {
   let z = Env::empty();
   z.bind(x);
   z
+}
+
+pub fn Env::method_ty(self: Env, sty: Name, name: String) -> Type? {
+  let qualified = Name :: { pack: sty.pack, ns: Some(sty.name), name };
+  if (self._fns.contains(qualified)) {
+    return Some(self._fns[qualified].ty);
+  }
+  return None;
 }

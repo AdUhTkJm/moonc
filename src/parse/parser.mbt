@@ -4,13 +4,12 @@ typealias @diag.Loc;
 pub struct Parser {
   mut place: Int
   data: Array[Token]
-  pack: Option[String]
   filename: String
   attr: Array[Attribute]
 }
 
-pub fn Parser::new(pack: Option[String], filename: String, tokens: Array[Token]) -> Parser {
-  return { place: 0, data: tokens, pack: pack, filename: filename, attr: [] }
+pub fn Parser::new(filename: String, tokens: Array[Token]) -> Parser {
+  return { place: 0, data: tokens, filename: filename, attr: [] }
 }
 
 ///|
@@ -239,15 +238,15 @@ pub fn Parser::ignore_until(self: Parser, stop: Array[TokenType]) -> Unit {
 ///|
 /// Produces a name with the parser's current package, but without any ns.
 /// 
-pub fn Parser::unqualified(self: Parser, x: String) -> Name {
-  Name::unqualified(self.pack, x);
+fn unqualified(x: String) -> Name {
+  Name::unqualified(None, x);
 }
 
 ///|
 /// Produces a name with the parser's current package, and with the specified ns.
 /// 
-pub fn Parser::qualified(self: Parser, ns: String, x: String) -> Name {
-  Name::qualified(self.pack, ns, x);
+fn qualified(ns: String, x: String) -> Name {
+  Name::qualified(None, ns, x);
 }
 
 ///|
@@ -255,7 +254,7 @@ pub fn Parser::qualified(self: Parser, ns: String, x: String) -> Name {
 /// types and user-defined named types with optional package qualification.
 ///
 pub fn Parser::basetype(self: Parser) -> Type {
-  let mut pack = self.pack;
+  let mut pack = None;
   if (self.peek().ty is Packname(x)) {
     self.advance();
     pack = Some(x);
@@ -267,7 +266,7 @@ pub fn Parser::basetype(self: Parser) -> Type {
   }
 
   let ty = self.expect_typename();
-  if (pack != self.pack) {
+  if (pack != None) {
     return Named({ pack: pack, name: ty, ns: None }, [])
   }
   match (ty) {
@@ -275,7 +274,7 @@ pub fn Parser::basetype(self: Parser) -> Type {
     "Float" => Float
     "Double" => Double
     "Unit" => Unit
-    _ => Named(self.unqualified(ty), [])
+    _ => Named(unqualified(ty), [])
   }
 }
 
@@ -685,7 +684,7 @@ pub fn Parser::fstr(self: Parser, str_: String) -> AST {
         let code = String::from_array(code);
         let tokens = Lexer::new(self.filename + "_fstring_\{@utils.count()}", code).lex();
         let errcnt = @diag.errcnt();
-        let ast = Parser::new(self.pack, self.filename, tokens).expr();
+        let ast = Parser::new(self.filename, tokens).expr();
         if (errcnt != @diag.errcnt()) {
           @diag.error(from, self.loc(), "cannot parse subexpression in f-string");
           return AST::new(Str(""), from, self.loc());
@@ -835,14 +834,14 @@ pub fn Parser::primary(self: Parser) -> AST {
       if (self.checks(Arrrow)) {
         let body = self.exprs();
         let detail = FnDetail :: {
-          vis: Priv, name: self.unqualified("__lambda_\{@utils.count()}"),
+          vis: Priv, name: unqualified("__lambda_\{@utils.count()}"),
           params: [name], tyvars: [], kwargs: [],
           body, ty: Function([Unknown], Unknown), ext: None
         }
         return AST::new(FnDecl(detail), from, self.loc());
       }
 
-      AST::new(VarRef(self.unqualified(name)), from, self.loc());
+      AST::new(VarRef(unqualified(name)), from, self.loc());
     }
     LPar => {
       let old = self.place;
@@ -875,7 +874,7 @@ pub fn Parser::primary(self: Parser) -> AST {
       if (good && self.checks(Arrrow)) {
         let body = self.exprs();
         let detail = FnDetail :: {
-          vis: Priv, name: self.unqualified("__lambda_\{@utils.count()}"),
+          vis: Priv, name: unqualified("__lambda_\{@utils.count()}"),
           params, tyvars: [], kwargs: [],
           body, ty: Function(argTys, Unknown), ext: None
         }
@@ -888,8 +887,8 @@ pub fn Parser::primary(self: Parser) -> AST {
 
       let exprs = [];
       while (not(self.checks(RPar)) && not(self.eof())) {
-        exprs.push(self.expr());
-        if (not(self.peek().isa(RPar))) {
+        exprs.push(self.exprs());
+        if (not(self.peeks().isa(RPar))) {
           self.expects(Comma);
         }
       }
@@ -916,7 +915,7 @@ pub fn Parser::primary(self: Parser) -> AST {
           map[ident] = if (self.checks(Colon)) {
             self.exprs();
           } else {
-            AST::new(VarRef(self.unqualified(ident)), from, from);
+            AST::new(VarRef(unqualified(ident)), from, from);
           }
 
           if (not(self.peek().isa(RBrace))) {
@@ -937,7 +936,7 @@ pub fn Parser::primary(self: Parser) -> AST {
               self.exprs();
             } else {
               // The name is omitted.
-              AST::new(VarRef(self.unqualified(ident)), from, from);
+              AST::new(VarRef(unqualified(ident)), from, from);
             }
 
             if (not(self.peeks().isa(RBrace))) {
@@ -972,19 +971,19 @@ pub fn Parser::primary(self: Parser) -> AST {
               }
             }
           }
-          return AST::new(EnumConstr(self.qualified(ty, name), exprs), from, self.loc());
+          return AST::new(EnumConstr(qualified(ty, name), exprs), from, self.loc());
         }
         // Ty:: { ... }
         if (self.checks(LBrace)) {
           self.retrace();
           let init = self.primary();
-          init.ty = Named(self.unqualified(ty), []);
+          init.ty = Named(unqualified(ty), []);
           return init;
         }
 
         // Ty::field
         let name = self.expect_ident();
-        return AST::new(VarRef(self.qualified(ty, name)), from, self.loc());
+        return AST::new(VarRef(qualified(ty, name)), from, self.loc());
       }
       // Ty(...)
       let exprs = [];
@@ -999,7 +998,7 @@ pub fn Parser::primary(self: Parser) -> AST {
         }
       }
 
-      return AST::new(EnumConstr(self.unqualified(ty), exprs), from, self.loc());
+      return AST::new(EnumConstr(unqualified(ty), exprs), from, self.loc());
     }
     LBracket => {
       let exprs = [];
@@ -1592,14 +1591,14 @@ pub fn Parser::fndecl(self: Parser, vis: Visible, ext: String?) -> AST {
   let hastypename = self.peek().isa(Typename(""));
 
   let name = if (hasname) {
-    self.unqualified(self.expect_ident())
+    unqualified(self.expect_ident())
   } else if (hastypename) {
     let ns = self.expect_typename();
     self.expect(ColonColon);
     let name = self.expect_ident();
-    self.qualified(ns, name);
+    qualified(ns, name);
   } else {
-    self.unqualified("__lambda_\{@utils.count()}")
+    unqualified("__lambda_\{@utils.count()}")
   };
 
   let params = [];
@@ -1671,7 +1670,7 @@ pub fn Parser::fndecl(self: Parser, vis: Visible, ext: String?) -> AST {
       let stmt = self.stmt();
       branches.push((pattern, stmt));
     }
-    let varref = AST::new(VarRef(self.unqualified("__matcher")), from, from);
+    let varref = AST::new(VarRef(unqualified("__matcher")), from, from);
     AST::new(Match(varref, branches), from, self.loc());
   } else {
     self.block();
@@ -1717,7 +1716,7 @@ pub fn Parser::structdecl(self: Parser, vis: Visible, ext: String?) -> AST {
   let deriving = self.deriving();
   let detail = StructDetail :: {
     vis,
-    name: self.unqualified(name),
+    name: unqualified(name),
     entries: Map::from_array(fields.map(fn (x) { (x.name, x) })),
     tyvars, deriving, ext
   };
@@ -1762,7 +1761,7 @@ pub fn Parser::enumdecl(self: Parser, vis: Visible, ext: String?) -> AST {
   let deriving = self.deriving();
   let detail = EnumDetail :: {
     vis,
-    name: self.unqualified(name),
+    name: unqualified(name),
     entries: Map::from_array(variants.map(fn (x) { (x.0, { tys: x.1, named: Map::new() }) })),
     tyvars, deriving, error: false, ext
   };
@@ -1784,7 +1783,7 @@ pub fn Parser::globaldecl(self: Parser, vis: Visible, ext: String?) -> AST {
   self.semicolon();
   let detail = GlobalDetail :: {
     vis, ext, init,
-    name: self.unqualified(name),
+    name: unqualified(name),
     ty: ty.or(Unknown)
   };
   let ast = AST::new(GlobalDecl(detail), from, self.loc());
@@ -1805,7 +1804,7 @@ pub fn Parser::constdecl(self: Parser, vis: Visible, ext: String?) -> AST {
   let init = self.exprs();
   self.semicolon();
   let detail = GlobalDetail :: {
-    name: self.unqualified(name),
+    name: unqualified(name),
     init, ext, vis,
     ty: ty.or(Unknown)
   };
@@ -1822,7 +1821,7 @@ pub fn Parser::qualified_typename(self: Parser) -> Name {
     pack = Some(x);
   }
   let name = self.expect_typename();
-  let mut name = self.unqualified(name);
+  let mut name = unqualified(name);
   if (pack is Some(x)) {
     name = name.pack(x);
   }
@@ -1838,7 +1837,7 @@ pub fn Parser::qualified_name(self: Parser) -> Name {
     self.strip();
   }
   let name = self.expect_ident();
-  let mut name = self.unqualified(name);
+  let mut name = unqualified(name);
   if (pack is Some(x)) {
     name = name.pack(x);
   }
@@ -1959,7 +1958,7 @@ pub fn Parser::tydecl(self: Parser, vis: Visible, ext: String?, error: Bool) -> 
   let from = self.peek().loc;
 
   let name = self.expect_typename();
-  let name = self.unqualified(name);
+  let name = unqualified(name);
   let tyvars = self.tyvars();
   let tys = [];
   if (not(self.check(Newline) || self.check(Semicolon))) {
@@ -2031,7 +2030,7 @@ pub fn Parser::mbtifn(self: Parser) -> FnDetail {
   self.strip();
   
   let tyvars = self.tyvars();
-  let name = self.unqualified(self.expect_ident())
+  let name = unqualified(self.expect_ident())
 
   let params = [];
   let argTys = [];
@@ -2099,7 +2098,7 @@ pub fn Parser::mbtifn(self: Parser) -> FnDetail {
 pub fn Parser::traitdecl(self: Parser, vis: Visible) -> AST {
   let from = self.last().loc;
   self.strip();
-  let name = self.unqualified(self.expect_typename());
+  let name = unqualified(self.expect_typename());
   let tyvars = self.tyvars();
   let funcs = [];
   self.expects(LBrace);

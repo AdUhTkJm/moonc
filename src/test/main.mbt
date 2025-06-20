@@ -16,14 +16,24 @@ fn parse(file: String, content: String) -> Unit {
     return;
   }
 
-  let parser = @parse.Parser::new(None, file, tokens);
+  let parser = @parse.Parser::new(file, tokens);
   let ast = parser.parse();
   let good = @diag.report();
   if (not(good)) {
     return;
   }
 
-  let _ = @sema.Env::new(ast);
+  println(ast);
+}
+
+pub fn typing(ast: @parse.AST) -> Unit {
+  let env = @sema.Env::new(ast);
+  let ast = env.check();
+  let good = @diag.report();
+  if (not(good)) {
+    return;
+  }
+
   println(ast);
 }
 
