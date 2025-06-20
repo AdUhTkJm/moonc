@@ -61,6 +61,7 @@ pub(all) enum TokenType {
   Const
   Suberror
   Loop
+  Package
 
   // Operators
   LBrace            // {
@@ -206,6 +207,7 @@ pub impl Show for TokenType with to_string(self) -> String {
     Const => "const"
     Suberror => "suberror"
     Loop => "loop"
+    Package => "package"
     Str(x) => "string literal \"\{x}\""
     RawStr(x) => "raw string literal \"\{x}\""
     Double(_, str) => "double literal \{str}"

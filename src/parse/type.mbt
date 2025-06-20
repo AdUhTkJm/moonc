@@ -19,6 +19,7 @@ pub(all) enum Type {
   Weak(Ref[Type])
   MayError(Type)
   HasError(Type, Type)
+  VirtualBase(Type)
   Error
 }
 pub impl Show for Type with to_string(self) -> String {
@@ -52,6 +53,7 @@ pub impl Show for Type with to_string(self) -> String {
     Typevar(v) => "\{v}"
     HasError(x, y) => "(\{x} raise \{y})"
     MayError(x) => "(\{x} raise?)"
+    VirtualBase(x) => "(&\{x})"
   }
 }
 
@@ -72,6 +74,7 @@ pub fn Type::map(self: Type, f: (Type) -> Type) -> Type {
     Weak(x) => Weak({ val: x.val.map(f) })
     HasError(x, y) => HasError(x.map(f), y.map(f))
     MayError(x) => MayError(x.map(f))
+    VirtualBase(x) => VirtualBase(x.map(f))
     Unknown | Int | Double | Float |
     Char | Bool | Typevar(_) | Unit |
     String | Error | Long => self
@@ -134,5 +137,6 @@ pub fn Type::name(self: Type) -> Option[Name] {
     Error => builtin("Error")
     HasError(x, _) => x.name()
     MayError(x) => x.name()
+    VirtualBase(x) => x.name()
   }
 }

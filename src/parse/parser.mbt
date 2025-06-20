@@ -279,13 +279,24 @@ pub fn Parser::basetype(self: Parser) -> Type {
 }
 
 ///|
+/// Parses types with prefix `&`. The symbol is not associative.
+/// 
+pub fn Parser::prefix_type(self: Parser) -> Type {
+  if (self.check(Bitand)) {
+    let ty = self.basetype();
+    return VirtualBase(ty);
+  }
+  return self.basetype();
+}
+
+///|
 /// Parses postfixes `?` and `[T]` (as type arguments).
 /// 
 /// The postfix `raise?` is also parsed here.
 /// 
 pub fn Parser::postfix_type(self: Parser) -> Type {
   let from = self.peek().loc;
-  let mut ty = self.basetype();
+  let mut ty = self.prefix_type();
   if (self.check(LBracket)) {
     // Type arguments
     let args = [];
@@ -330,7 +341,14 @@ pub fn Parser::binary_type(self: Parser) -> Type {
   let mut ty = self.postfix_type();
   while (self.peek().is_any([Ques, Raise, Bang])) {
     let tok = self.consume();
-    let next = self.basetype(); // No post-fix allowed.
+
+    // When there's nothing after raise, it defaults to error.
+    let next = if (not(self.peek().ty is Typename(_))) {
+      Error
+    } else  {
+      self.basetype();
+    }
+
     ty = match tok.ty {
       Ques => {
         if (not(next is Error)) {
@@ -963,10 +981,8 @@ pub fn Parser::primary(self: Parser) -> AST {
           let exprs = [];
           if (self.check(LPar)) {
             while (not(self.checks(RPar)) && not(self.eof())) {
-              exprs.push(self.expr());
-              self.strip();
-
-              if (not(self.peek().isa(RPar))) {
+              exprs.push(self.exprs());
+              if (not(self.peeks().isa(RPar))) {
                 self.expects(Comma);
               }
             }
@@ -1555,7 +1571,12 @@ pub fn Parser::block(self: Parser) -> AST {
 }
 
 pub fn Parser::tyvar(self: Parser) -> Typevar {
-  let name = self.expect_typename();
+  let name = if (self.peek().ty is Ident("_")) {
+    self.advance(); "_"
+  } else {
+    self.expect_typename();
+  }
+
   if (not(self.checks(Colon))) {
     return { name, extend: [] }
   }
@@ -1896,8 +1917,7 @@ pub fn Parser::impldecl(self: Parser, vis: Visible, ext: String?) -> AST {
   } else {
     self.block();
   }
-  // FnDecl only records its return type;
-  // the function type can be inferred from `args`.
+  
   let detail = ImplDetail :: {
     vis, ext,
     nstruct, ntrait, nfunc, params, body, tyvars,
@@ -2024,9 +2044,9 @@ pub fn Parser::testdecl(self: Parser) -> AST {
 }
 
 ///|
-/// Parses a `.mbti` file styled function declaration.
+/// Parses a function declaration inside a trait.
 /// 
-pub fn Parser::mbtifn(self: Parser) -> FnDetail {
+pub fn Parser::trait_fn(self: Parser) -> FnDetail {
   self.strip();
   
   let tyvars = self.tyvars();
@@ -2047,6 +2067,7 @@ pub fn Parser::mbtifn(self: Parser) -> FnDetail {
 
     let loc = self.peek().loc;
     if (self.peeks().ty is Ident(w)) {
+      self.advance();
       argname = w;
       is_kwarg = self.checks(Tilde);
       is_opt = self.checks(Ques);
@@ -2103,7 +2124,7 @@ pub fn Parser::traitdecl(self: Parser, vis: Visible) -> AST {
   let funcs = [];
   self.expects(LBrace);
   while (not(self.checks(RBrace)) && not(self.eof())) {
-    funcs.push(self.mbtifn());
+    funcs.push(self.trait_fn());
 
     if (self.peek().isa(RBrace)) {
       self.semicolon();

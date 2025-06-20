@@ -89,7 +89,7 @@ pub struct EnumEntry {
   named: Map[String, Type]
 }
 
-pub struct StructDetail {
+pub(all) struct StructDetail {
   entries: Map[String, StructEntry]
   vis: Visible
   deriving: Array[Name]
@@ -98,7 +98,7 @@ pub struct StructDetail {
   ext: String?
 }
 
-pub struct EnumDetail {
+pub(all) struct EnumDetail {
   entries: Map[String, EnumEntry]
   vis: Visible
   deriving: Array[Name]
@@ -127,7 +127,7 @@ pub struct Kwarg {
   name: String
   ty: Type
   default: AST?
-}
+} derive (Show)
 
 pub struct FnDetail {
   vis: Visible
@@ -152,7 +152,7 @@ pub struct ImplDetail {
   ext: String?
 }
 
-pub struct TraitDetail {
+pub(all) struct TraitDetail {
   vis: Visible
   name: Name
   funcs: Array[FnDetail]

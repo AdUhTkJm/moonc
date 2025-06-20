@@ -504,6 +504,7 @@ pub fn Lexer::next(self: Lexer) -> Token {
         "const" => Token::new(Const, loc, 5)
         "suberror" => Token::new(Suberror, loc, 8)
         "loop" => Token::new(Loop, loc, 4)
+        "package" => Token::new(Package, loc, 7)
         "pub" => {
           if (self.check("(all)")) {
             return Token::new(Puball, loc, 8);
