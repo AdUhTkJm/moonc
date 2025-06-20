@@ -45,7 +45,9 @@ if (args[0] === "-d") {
   }
 
   runMoon(files);
-} else if (args[0] === "-t") {
+}
+
+if (args[0] === "-t") {
   const file = args[1];
   if (!file) {
     console.error("Please provide a file name with -t");
@@ -53,7 +55,8 @@ if (args[0] === "-d") {
   }
 
   runMoon([resolve(file)]);
-} else {
-  console.error("Unknown argument. Use -d <directory> or -t <file>");
-  process.exit(1);
+}
+
+if (args[0] == "--ci") {
+  execSync("python3 .github/scripts/ci_parser.py", { stdio: "inherit" });
 }

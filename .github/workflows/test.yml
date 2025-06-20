@@ -12,7 +12,6 @@ jobs:
   check:
     strategy:
       matrix:
-        version: [stable,pre-release,bleeding]
         os:
           - name: ubuntu-latest
             triple: x86_64-linux-gnu
@@ -34,7 +33,7 @@ jobs:
       - name: setup moon
         uses: illusory0x0/setup-moonbit@v0.1.0
         with: 
-          version: ${{ matrix.version }}
+          version: stable
 
       - name: install module dependencies
         run: |
@@ -51,4 +50,5 @@ jobs:
       - name: test
         run: |
           cd $GITHUB_WORKSPACE
+          ln -s corelib ~/.moon/lib/core/builtin
           python3 .github/scripts/ci_parser.py

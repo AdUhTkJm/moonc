@@ -15,31 +15,31 @@ pub fn[K: Eq + Hash, V] Map::from_array(x: Array[(K, V)]) -> Map[K, V] {
 }
 
 pub fn[K: Eq + Hash, V] Map::op_set(self: Map[K, V], x: K, y: V) -> Unit {
-  self._.op_set(x, y);
+  self.inner().op_set(x, y);
 }
 
 pub fn[K: Eq + Hash, V] Map::op_get(self: Map[K, V], x: K) -> V {
-  self._.get(x).unwrap();
+  self.inner().get(x).unwrap();
 }
 
 pub fn[K: Eq + Hash, V] Map::get(self: Map[K, V], x: K) -> V? {
-  self._.get(x);
+  self.inner().get(x);
 }
 
 pub fn[K: Eq + Hash, V] Map::remove(self: Map[K, V], x: K) -> Unit {
-  self._.remove(x);
+  self.inner().remove(x);
 }
 
 pub fn[K: Eq + Hash, V] Map::size(self: Map[K, V]) -> Int {
-  self._.size();
+  self.inner().size();
 }
 
 pub fn[K: Eq + Hash, V] Map::to_array(self: Map[K, V]) -> Array[(K, V)] {
-  self._.to_array();
+  self.inner().to_array();
 }
 
 pub fn[K: Eq + Hash, V] Map::iter(self: Map[K, V]) -> Iter[(K, V)] {
-  self._.iter();
+  self.inner().iter();
 }
 
 pub fn[K: Eq + Hash, V] Map::values(self: Map[K, V]) -> Array[V] {
@@ -47,9 +47,9 @@ pub fn[K: Eq + Hash, V] Map::values(self: Map[K, V]) -> Array[V] {
 }
 
 pub fn[K: Eq + Hash, V] Map::contains(self: Map[K, V], k: K) -> Bool {
-  self._.contains(k);
+  self.inner().contains(k);
 }
 
 pub fn[K: Eq + Hash, V] Map::clone(self: Map[K, V]) -> Map[K, V] {
-  Map::from_array(self._.to_array());
+  Map::from_array(self.inner().to_array());
 }

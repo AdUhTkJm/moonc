@@ -109,7 +109,7 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       self.new_local(x);
     }
     VarRef(name) => {
-      if (name.namespace is None && name.pack is None) {
+      if (name.ns is None && name.pack is None) {
         if (self._locals.contains(name.name)) {
           x.ty = unify(x.ty, self.get_local(name.name), x.from, x.to);
           return x.ty;
@@ -192,17 +192,17 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
     For(starts, stop, steps, body, exit) => {
       let vars = Set::new();
       for init in starts {
-        let (var, init) = init;
-        vars.add(var);
-        self.add_local(var, self.infer(init));
+        let (_var, init) = init;
+        vars.add(_var);
+        self.add_local(_var, self.infer(init));
       }
       unify(self.infer(stop), Bool, stop.from, stop.to) |> ignore;
       for step in steps {
-        let (var, init) = step;
-        if (not(vars.contains(var))) {
-          @diag.error(init.from, init.to, "unknown induction variable: \{var}");
+        let (_var, init) = step;
+        if (not(vars.contains(_var))) {
+          @diag.error(init.from, init.to, "unknown induction variable: \{_var}");
         } else {
-          init.ty = unify(self._locals[var].ty, self.infer(init), init.from, init.to);
+          init.ty = unify(self._locals[_var].ty, self.infer(init), init.from, init.to);
         }
       }
       body.ty = unify(self.infer(body), Unit, body.from, body.to);

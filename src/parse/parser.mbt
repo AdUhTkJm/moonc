@@ -53,6 +53,14 @@ pub fn Parser::consume(self: Parser) -> Token {
 }
 
 ///|
+/// Consumes the next token from the parser's token stream and advances
+/// through it. Does not return the token.
+///
+pub fn Parser::advance(self: Parser) -> Unit {
+  self.consume() |> ignore;
+}
+
+///|
 /// Returns the current token at the parser's position without advancing the
 /// position.
 ///
@@ -61,6 +69,14 @@ pub fn Parser::peek(self: Parser) -> Token {
     return Token::new(EOF, self.eof_loc(), 0);
   }
   self.data[self.place]
+}
+
+///|
+/// Returns the previous token at the parser's position. Does not perform any
+/// boundary checks; panics if there's no such token.
+///
+pub fn Parser::last(self: Parser) -> Token {
+  self.data[self.place - 1]
 }
 
 ///|
@@ -221,17 +237,17 @@ pub fn Parser::ignore_until(self: Parser, stop: Array[TokenType]) -> Unit {
 }
 
 ///|
-/// Produces a name with the parser's current package, but without any namespace.
+/// Produces a name with the parser's current package, but without any ns.
 /// 
 pub fn Parser::unqualified(self: Parser, x: String) -> Name {
   Name::unqualified(self.pack, x);
 }
 
 ///|
-/// Produces a name with the parser's current package, and with the specified namespace.
+/// Produces a name with the parser's current package, and with the specified ns.
 /// 
-pub fn Parser::qualified(self: Parser, namespace: String, x: String) -> Name {
-  Name::qualified(self.pack, namespace, x);
+pub fn Parser::qualified(self: Parser, ns: String, x: String) -> Name {
+  Name::qualified(self.pack, ns, x);
 }
 
 ///|
@@ -241,18 +257,18 @@ pub fn Parser::qualified(self: Parser, namespace: String, x: String) -> Name {
 pub fn Parser::basetype(self: Parser) -> Type {
   let mut pack = self.pack;
   if (self.peek().ty is Packname(x)) {
-    self.consume() |> ignore;
+    self.advance();
     pack = Some(x);
     self.expect(Dot);
   }
   if (self.peek().ty is Ident("_")) {
-    self.consume() |> ignore;
+    self.advance();
     return Unknown;
   }
 
   let ty = self.expect_typename();
   if (pack != self.pack) {
-    return Named({ pack: pack, name: ty, namespace: None }, [])
+    return Named({ pack: pack, name: ty, ns: None }, [])
   }
   match (ty) {
     "Int" => Int
@@ -450,6 +466,16 @@ fn Parser::base_pattern(self: Parser) -> Pattern {
     return Array(content);
   }
 
+  // Expect `-Int(...)`
+  if (tok.isa(Minus)) {
+    if (self.consumes().ty is Int(x, ty)) {
+      return Int(-x, ty);
+    }
+
+    @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected match pattern");
+    return Unknown;
+  }
+
   match tok.ty {
     Int(x, ty) => Int(x, ty)
     Char(x) => Char(x)
@@ -516,10 +542,16 @@ pub fn Parser::or_pattern(self: Parser) -> Pattern {
   }
 }
 
+///|
+/// Parses a matching pattern.
+/// 
 pub fn Parser::pattern(self: Parser) -> Pattern {
   self.or_pattern();
 }
 
+///|
+/// Parses a `match` expression.
+/// 
 pub fn Parser::matchexpr(self: Parser) -> AST {
   let from = self.peek().loc;
   let matcher = self.expr();
@@ -539,6 +571,12 @@ pub fn Parser::matchexpr(self: Parser) -> AST {
   AST::new(Match(matcher, branches), from, self.loc());
 }
 
+///|
+/// Parses an f-string (string with embedded expressions).
+/// 
+/// In lexer, these strings are lexed as-is, and thus must be
+/// parsed here.
+/// 
 pub fn Parser::fstr(self: Parser, str_: String) -> AST {
   let from = self.peek().loc.advance(-str_.length());
   let str = str_.to_array();
@@ -657,6 +695,111 @@ pub fn Parser::fstr(self: Parser, str_: String) -> AST {
   return AST::new(Fstr(chunks), from, self.loc());
 }
 
+///|
+/// Parses a for loop.
+/// 
+/// Accepts both forms `for inits; cond; step` and `for x in y`.
+/// 
+pub fn Parser::forexpr(self: Parser) -> AST {
+  let from = self.last().loc;
+  let old = self.place;
+  let _ = self.consumes();
+  if (self.checks(In) || self.checks(Comma)) {
+    self.place = old;
+    let names = [];
+    while (not(self.checks(In)) && not(self.eof())) {
+      names.push(self.expect_idents());
+      if (not(self.peeks().isa(In))) {
+        self.expect(Comma);
+      }
+    }
+
+    let range = self.expr();
+    let body = self.block();
+    let mut exit = None;
+    if (self.checks(Else)) {
+      exit = Some(self.block());
+    }
+    return AST::new(ForIn(names, range, body, exit), from, self.loc());
+  }
+  self.place = old;
+  let names = [];
+  while (not(self.checks(Semicolon)) && not(self.peek().isa(LBrace)) && not(self.eof())) {
+    let ident = self.expect_idents();
+    self.expects(Assign);
+    let val = self.exprs();
+    names.push((ident, val));
+
+    if (self.check(Newline)) {
+      break;
+    }
+    if (not(self.peeks().is_any([Semicolon, LBrace]))) {
+      self.expect(Comma);
+    }
+  }
+
+  let cond = if (self.checks(Semicolon) || self.peek().isa(LBrace)) {
+    AST::new(Bool(true), self.loc(), self.loc());
+  } else {
+    let expr = self.exprs();
+    self.checks(Semicolon) |> ignore;
+    expr
+  }
+
+  let steps = [];
+  while (not(self.checks(Semicolon)) && not(self.peek().isa(LBrace)) && not(self.eof())) {
+    let name = self.expect_idents();
+    self.expects(Assign);
+    let step = self.exprs();
+    steps.push((name, step));
+    if (self.check(Newline)) {
+      break;
+    }
+    if (not(self.peeks().is_any([Semicolon, LBrace]))) {
+      self.expect(Comma);
+    }
+  }
+
+  let body = self.block();
+
+  let mut exit = None;
+  if (self.checks(Else)) {
+    exit = Some(self.block());
+  }
+  return AST::new(For(names, cond, steps, body, exit), from, self.loc());
+}
+
+///|
+/// Parses a while loop.
+/// 
+pub fn Parser::whileexpr(self: Parser) -> AST {
+  let from = self.last().loc;
+  self.strip();
+  let cond = self.expr();
+  let body = self.block();
+  let mut exit = None;
+  if (self.checks(Else)) {
+    exit = Some(self.block());
+  }
+  return AST::new(While(cond, body, exit), from, self.loc());
+}
+
+///|
+/// Parses a `loop` loop, i.e. a pattern-matching loop.
+/// 
+pub fn Parser::loopexpr(self: Parser) -> AST {
+  let from = self.last().loc;
+  let matching = self.matchexpr();
+
+  let mut exit = None;
+  if (self.checks(Else)) {
+    exit = Some(self.block());
+  }
+
+  let _true = AST::new(Bool(true), from, from);
+  return AST::new(While(_true, matching, exit), from, self.loc());
+}
+
 pub fn Parser::primary(self: Parser) -> AST {
   let from = self.peek().loc;
   let tok = self.consume();
@@ -736,6 +879,9 @@ pub fn Parser::primary(self: Parser) -> AST {
       self.place = old - 1;
       self.block();
     }
+    For => self.forexpr();
+    While => self.whileexpr();
+    Loop => self.loopexpr();
     Match => self.matchexpr();
     If => self.ifexpr();
     Fn => self.fndecl(Priv, None);
@@ -829,7 +975,7 @@ pub fn Parser::postfix(self: Parser) -> AST {
         (self.peek().isa(Newline) && self.checks(Dot) && retrace()) ||
         (self.peek().isa(Newline) && self.checks(Expand) && retrace())) {
     if (self.peek().ty is Double(_, w)) {
-      self.consume() |> ignore;
+      self.advance();
       // This is actually things like t.0, t.1;
       // but it's lexed as 't' .0, 't' .1.
       // We have the original representation of the string for this.
@@ -862,13 +1008,13 @@ pub fn Parser::postfix(self: Parser) -> AST {
         self.strip();
         let expr = self.expr();
         if (self.checks(Assign)) {
-          if (expr.kind is VarRef(v) && v.pack is None && v.namespace is None) {
+          if (expr.kind is VarRef(v) && v.pack is None && v.ns is None) {
             kwargs[v.name] = self.exprs();
           } else {
             @diag.error(expr.from, self.loc(), "assignment does not return a value");
           }
         } else if (self.checks(Tilde)) {
-          if (expr.kind is VarRef(v) && v.pack is None && v.namespace is None) {
+          if (expr.kind is VarRef(v) && v.pack is None && v.ns is None) {
             kwargs[v.name] = expr;
           } else {
             @diag.error(expr.from, self.loc(), "a name is expected to precede '~' as named argument");
@@ -1214,6 +1360,20 @@ pub fn Parser::stmt(self: Parser) -> AST {
         return AST::new(StructLet(pattern, init, ty.or(Unknown)), from, self.loc());
       }
 
+      // Enum declaration.
+      if (self.peeks().ty is Typename(_)) {
+        self.advance();
+        let pattern = self.pattern();
+        let mut ty = None;
+        if (self.checks(Colon)) {
+          ty = Some(self.typename());
+        }
+        self.expects(Assign);
+        let init = self.exprs();
+        self.semicolon();
+        return AST::new(EnumLet(pattern, init, ty.or(Unknown)), from, self.loc());
+      }
+
       let mutable = self.checks(Mut);
       let name = self.expect_idents();
       let mut ty = None;
@@ -1226,7 +1386,8 @@ pub fn Parser::stmt(self: Parser) -> AST {
       return AST::new(VarDecl({ name, mutable, init, ty: ty.or(Unknown) }), from, self.loc());
     }
     Return => {
-      if (self.check(Newline) || self.check(Semicolon)) {
+      if (self.peek().is_any([Newline, Semicolon, RBrace])) {
+        self.advance();
         return AST::new(Return(None), from, self.loc());
       }
       let expr = self.expr();
@@ -1234,7 +1395,8 @@ pub fn Parser::stmt(self: Parser) -> AST {
       return AST::new(Return(Some(expr)), from, self.loc());
     }
     Break => {
-      if (self.check(Newline) || self.check(Semicolon)) {
+      if (self.peek().is_any([Newline, Semicolon, RBrace])) {
+        self.advance();
         return AST::new(Break(None), from, self.loc());
       }
       let expr = self.expr();
@@ -1247,87 +1409,11 @@ pub fn Parser::stmt(self: Parser) -> AST {
         exprs.push(self.expr());
         if (not(self.peek().is_any([Newline, Semicolon]))) {
           self.expect(Comma);
+          self.strip();
         }
       }
       self.semicolon();
       return AST::new(Continue(exprs), from, self.loc());
-    }
-    While => {
-      self.strip();
-      let cond = self.expr();
-      let body = self.block();
-      let mut exit = None;
-      if (self.checks(Else)) {
-        exit = Some(self.block());
-      }
-      return AST::new(While(cond, body, exit), from, self.loc());
-    }
-    For => {
-      let old = self.place;
-      let _ = self.consumes();
-      if (self.checks(In) || self.checks(Comma)) {
-        self.place = old;
-        let names = [];
-        while (not(self.checks(In)) && not(self.eof())) {
-          names.push(self.expect_idents());
-          if (not(self.peeks().isa(In))) {
-            self.expect(Comma);
-          }
-        }
-
-        let range = self.expr();
-        let body = self.block();
-        let mut exit = None;
-        if (self.checks(Else)) {
-          exit = Some(self.block());
-        }
-        return AST::new(ForIn(names, range, body, exit), from, self.loc());
-      }
-      self.place = old;
-      let names = [];
-      while (not(self.checks(Semicolon)) && not(self.peek().isa(LBrace)) && not(self.eof())) {
-        let ident = self.expect_idents();
-        self.expects(Assign);
-        let val = self.exprs();
-        names.push((ident, val));
-
-        if (self.check(Newline)) {
-          break;
-        }
-        if (not(self.peeks().is_any([Semicolon, LBrace]))) {
-          self.expect(Comma);
-        }
-      }
-
-      let cond = if (self.checks(Semicolon) || self.peek().isa(LBrace)) {
-        AST::new(Bool(true), self.loc(), self.loc());
-      } else {
-        let expr = self.exprs();
-        self.checks(Semicolon) |> ignore;
-        expr
-      }
-
-      let steps = [];
-      while (not(self.checks(Semicolon)) && not(self.peek().isa(LBrace)) && not(self.eof())) {
-        let name = self.expect_idents();
-        self.expects(Assign);
-        let step = self.exprs();
-        steps.push((name, step));
-        if (self.check(Newline)) {
-          break;
-        }
-        if (not(self.peeks().is_any([Semicolon, LBrace]))) {
-          self.expect(Comma);
-        }
-      }
-
-      let body = self.block();
-
-      let mut exit = None;
-      if (self.checks(Else)) {
-        exit = Some(self.block());
-      }
-      return AST::new(For(names, cond, steps, body, exit), from, self.loc());
     }
     Guard => {
       let cond = self.exprs();
@@ -1430,10 +1516,10 @@ pub fn Parser::fndecl(self: Parser, vis: Visible, ext: String?) -> AST {
   let name = if (hasname) {
     self.unqualified(self.expect_ident())
   } else if (hastypename) {
-    let namespace = self.expect_typename();
+    let ns = self.expect_typename();
     self.expect(ColonColon);
     let name = self.expect_ident();
-    self.qualified(namespace, name);
+    self.qualified(ns, name);
   } else {
     self.unqualified("__lambda_\{@utils.count()}")
   };
@@ -1512,8 +1598,7 @@ pub fn Parser::fndecl(self: Parser, vis: Visible, ext: String?) -> AST {
   } else {
     self.block();
   }
-  // FnDecl only records its return type;
-  // the function type can be inferred from `params`.
+  
   let ty = Function(argTys, retTy);
   let ast = AST::new(FnDecl({ vis, name, params, tyvars, body, ty, kwargs, ext }), from, self.loc());
   ast.attr = self.attr;
@@ -1775,11 +1860,9 @@ pub fn Parser::tyvars(self: Parser) -> Array[Typevar] {
 /// 
 /// The modifier `pub(all)` etc. are handled in `toplevel().
 /// 
-pub fn Parser::tydecl(self: Parser, vis: Visible, ext: String?) -> AST {
+pub fn Parser::tydecl(self: Parser, vis: Visible, ext: String?, error: Bool) -> AST {
   self.strip();
   let from = self.peek().loc;
-  // type! means an Error type.
-  let error = self.checks(Bang);
 
   let name = self.expect_typename();
   let name = self.unqualified(name);
@@ -1798,10 +1881,11 @@ pub fn Parser::tydecl(self: Parser, vis: Visible, ext: String?) -> AST {
   } else if (not(self.check(Newline) || self.check(Semicolon))) {
     // Either there's nothing, or there's a single typename.
     tys.push(self.typename());
-    self.semicolon();
   }
 
   let deriving = self.deriving();
+  self.semicolon();
+
   let detail = EnumDetail :: {
     entries: Map::from_array([("__mem", { tys, named: Map::new() })]),
     name, tyvars, deriving, error, ext, vis
@@ -1857,12 +1941,112 @@ pub fn Parser::testdecl(self: Parser) -> AST {
 }
 
 ///|
+/// Parses a `.mbti` file styled function declaration.
+/// 
+pub fn Parser::mbtifn(self: Parser) -> FnDetail {
+  self.strip();
+  
+  let tyvars = self.tyvars();
+  let name = self.unqualified(self.expect_ident())
+
+  let params = [];
+  let argTys = [];
+  let kwargs = [];
+
+  self.expects(LPar);
+  self.strip();
+  let mut i = 0;
+  while (not(self.checks(RPar)) && not(self.eof())) {
+    let mut argname = "_\{i}";
+    let mut is_kwarg = false;
+    let mut is_opt = false;
+    let mut ty = Type::Unknown;
+
+    let loc = self.peek().loc;
+    if (self.peeks().ty is Ident(w)) {
+      argname = w;
+      is_kwarg = self.checks(Tilde);
+      is_opt = self.checks(Ques);
+      if (is_kwarg && is_opt) {
+        @diag.error(loc, self.loc(), "modifiers '~' and '=' cannot appear together")
+      }
+      if (self.checks(Colon)) {
+        ty = self.typename();
+      }
+    } else {
+      ty = self.typename();
+    }
+    
+    if (is_kwarg) {
+      let mut default = None;
+      if (self.checks(Assign)) {
+        default = Some(self.exprs());
+      }
+      kwargs.push({ name: argname, ty, default });
+    } else if (is_opt) {
+      kwargs.push({ name: argname, ty: Option(ty), default: None });
+    } else {
+      params.push(argname);
+      argTys.push(ty);
+    }
+
+    if (not(self.peeks().isa(RPar))) {
+      self.expect(Comma);
+    }
+
+    i = i + 1;
+  }
+  
+  // Check the optional return type.
+  let mut retTy = Type::Unknown;
+  if (self.checks(Arrow)) {
+    retTy = self.typename();
+  }
+
+  let ty = Function(argTys, retTy);
+  let body = AST::new(Block([]), Loc::unknown(), Loc::unknown());
+  return { vis: Priv, name, params, tyvars, body, ty, kwargs, ext: None };
+}
+
+
+///|
+/// Parses a trait declaration.
+/// 
+pub fn Parser::traitdecl(self: Parser, vis: Visible) -> AST {
+  let from = self.last().loc;
+  self.strip();
+  let name = self.unqualified(self.expect_typename());
+  let tyvars = self.tyvars();
+  let funcs = [];
+  self.expects(LBrace);
+  while (not(self.checks(RBrace)) && not(self.eof())) {
+    funcs.push(self.mbtifn());
+
+    if (self.peek().isa(RBrace)) {
+      self.semicolon();
+    }
+    self.strip();
+  }
+
+  let detail = TraitDetail :: { vis, name, tyvars, funcs };
+  AST::new(TraitDecl(detail), from, self.loc());
+}
+
+///|
 /// Parses a toplevel declaration.
 /// 
 /// The arguments carry over visibility and extern information.
 /// 
 pub fn Parser::toplevel(self: Parser, vis: Visible, ext: String?) -> AST {
   let tok = self.consume();
+
+  fn noext(f) {
+    if (ext is Some(_)) {
+      @diag.error(tok.loc, self.loc(), "'extern' isn't allowed for this top-level definition");
+    }
+    f(vis);
+  }
+
   match (tok.ty) {
     Fn => self.fndecl(vis, ext);
     Struct => self.structdecl(vis, ext);
@@ -1872,19 +2056,11 @@ pub fn Parser::toplevel(self: Parser, vis: Visible, ext: String?) -> AST {
     Impl => self.impldecl(vis, ext);
     EOF => AST::new(Leaf, Loc::unknown(), Loc::unknown());
     Newline | Semicolon => self.toplevel(vis, ext);
-    Fnalias => {
-      if (ext is Some(_)) {
-        @diag.error(tok.loc, self.loc(), "'extern' isn't allowed for function alias");
-      }
-      self.aliasfn(vis);
-    }
-    Typealias => {
-      if (ext is Some(_)) {
-        @diag.error(tok.loc, self.loc(), "'extern' isn't allowed for type alias");
-      }
-      self.aliasty(vis);
-    }
-    Type => self.tydecl(vis, ext);
+    Fnalias => noext((vis) => self.aliasfn(vis));
+    Typealias => noext((vis) => self.aliasty(vis));
+    Trait => noext((vis) => self.traitdecl(vis));
+    Type => self.tydecl(vis, ext, self.checks(Bang));
+    Suberror => self.tydecl(vis, ext, true);
     Test => {
       if (vis != Priv) {
         @diag.warning(tok.loc, self.loc(), WPubTest);
@@ -1899,7 +2075,7 @@ pub fn Parser::toplevel(self: Parser, vis: Visible, ext: String?) -> AST {
     }
     Extern => {
       if (self.peeks().ty is Str(x)) {
-        self.consume() |> ignore;
+        self.advance();
         return self.toplevel(vis, Some(x));
       }
       return self.toplevel(vis, Some("default"));

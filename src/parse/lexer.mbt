@@ -116,7 +116,7 @@ fn de_escape(loc: Loc, str_: String) -> String {
   let mut pos = 0;
   let mut loc = loc;
 
-  let ch = fn () {
+  let ch = () => {
     let c = str[pos];
     pos += 1;
     loc = loc.advance(1);
@@ -505,6 +505,8 @@ pub fn Lexer::next(self: Lexer) -> Token {
         "raise" => Token::new(Raise, loc, 5)
         "test" => Token::new(Test, loc, 4)
         "const" => Token::new(Const, loc, 5)
+        "suberror" => Token::new(Suberror, loc, 8)
+        "loop" => Token::new(Loop, loc, 4)
         "pub" => {
           if (self.check("(all)")) {
             return Token::new(Puball, loc, 8);

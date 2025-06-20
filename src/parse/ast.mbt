@@ -35,7 +35,7 @@ pub(all) enum Visible {
 
 pub(all) struct Name {
   pack: String?
-  namespace: String?
+  ns: String?
   name: String
 } derive(Eq, Hash)
 
@@ -62,11 +62,11 @@ pub(all) enum Pattern {
 }
 
 pub fn Name::unqualified(pack: Option[String], x: String) -> Name {
-  { pack: pack, namespace: None, name: x }
+  { pack: pack, ns: None, name: x }
 }
 
-pub fn Name::qualified(pack: Option[String], namespace: String, x: String) -> Name {
-  { pack: pack, namespace: Some(namespace), name: x }
+pub fn Name::qualified(pack: Option[String], ns: String, x: String) -> Name {
+  { pack: pack, ns: Some(ns), name: x }
 }
 
 pub fn Name::pack(self: Name, pack: String) -> Name {
@@ -152,6 +152,13 @@ pub struct ImplDetail {
   ext: String?
 }
 
+pub struct TraitDetail {
+  vis: Visible
+  name: Name
+  funcs: Array[FnDetail]
+  tyvars: Array[Typevar]
+}
+
 pub impl Show for StructEntry with to_string(self) -> String {
   let mutable = if (self.mutable) { "mut " } else { "" }
   let vis = if (self.vis == Priv) { "priv " } else { "" }
@@ -193,6 +200,7 @@ pub impl Show for Typevar with output(self, writer) -> Unit {
 /// * `FnDecl(FnDetail)`: Function declaration.
 /// * `ImplDecl(ImplDetail)`: Implementations of traits.
 /// * `StructDecl(StructDetail)`: Structure type declaration.
+/// * `TraitDecl(TraitDetail)`: Trait declaration.
 /// * `StructInit(Map[String, AST])`: Structure initialization with field
 /// mappings.
 /// * `StructModif(AST, Map[String, AST])`: Structure modification using spread
@@ -200,6 +208,8 @@ pub impl Show for Typevar with output(self, writer) -> Unit {
 /// * `StructLet(Pattern, AST, Type)`: Structure destructuring in let bindings,
 /// with type optionally annotated (where the usual `None` is expressed by `Unknown`;
 /// same below).
+/// * `EnumLet(Pattern, AST, Type)`: Enum matching in let bindings, with type
+/// optionally annotated.
 /// * `ParamDecl(String)`: Parameter declaration with its name.
 /// * `VarDecl(LocalDetail)`: Local variable declaration.
 /// * `TupleDecl(Array[String], AST, Type)`: Tuple destructuring in let bindings,
@@ -267,9 +277,11 @@ pub(all) enum ASTType {
   FnDecl(FnDetail)
   ImplDecl(ImplDetail)
   StructDecl(StructDetail)
+  TraitDecl(TraitDetail)
   StructInit(Map[String, AST])
   StructModif(AST, Map[String, AST])
   StructLet(Pattern, AST, Type);
+  EnumLet(Pattern, AST, Type);
   ParamDecl(String)
   VarDecl(LocalDetail)
   TupleDecl(Array[String], AST, Type)
@@ -455,8 +467,8 @@ pub impl Show for Name with to_string(self) -> String {
   if (self.pack is Some(pack)) {
     builder.write_string("\{pack}.");
   }
-  if (self.namespace is Some(namespace)) {
-    builder.write_string("\{namespace}::");
+  if (self.ns is Some(ns)) {
+    builder.write_string("\{ns}::");
   }
   builder.write_string(self.name);
   builder.to_string()
@@ -494,7 +506,7 @@ pub impl Show for Type with to_string(self) -> String {
       let s = args.map(Type::to_string).join(", ")
       "((\{s}) -> \{ret})"
     }
-    Typevar(var) => "\{var}"
+    Typevar(v) => "\{v}"
     HasError(x, y) => "(\{x} raise \{y})"
     MayError(x, y) => "(\{x}?\{y})"
   }
@@ -588,7 +600,7 @@ fn dep_str(ast: AST, depth: Int) -> String {
       let name = names.join(", ");
       "let (\{name}): \{ty} = \{dep_str(init, depth)}"
     }
-    StructLet(pattern, init, ty) => {
+    StructLet(pattern, init, ty) | EnumLet(pattern, init, ty) => {
       "let \{pattern}: \{ty} = \{dep_str(init, depth)}";
     }
     TupleMake(arr) => {
@@ -642,6 +654,37 @@ fn dep_str(ast: AST, depth: Int) -> String {
       let tyvars = if (tyvars.is_empty()) { "" } else { let s = tyvars.map(Typevar::to_string).join(", "); "[\{s}]" };
       let ext = if (ext is Some(w)) { "extern \"\{w}\"" } else { "" };
       "\{visible}\{ext}struct \{name}\{tyvars} {\n  \{indent}\{fields}\n\{indent}}\{deriving}"
+    }
+    TraitDecl(detail) => {
+      let strs = [];
+      let { name, vis, funcs, tyvars } = detail;
+      let tyvars = if (tyvars.is_empty()) { "" } else { let s = tyvars.map(Typevar::to_string).join(", "); "[\{s}]" };
+      let visible = if (vis == Priv) { "" } else { "\{vis} " };
+      for i in funcs {
+        let { name, params, tyvars, ty, kwargs, .. } = i;
+        let params = if (["main", "init"].contains(name.name)) {
+          ""
+        } else {
+          let tys = if (ty is Function(tys, _)) { tys } else { [] };
+          fn get(i) { if (i >= tys.length()) { Type::Unknown } else { tys[i] } }
+          let params = params.mapi(fn (i, x) { "\{x}: \{get(i)}"}).join(", ");
+          let mut s = kwargs.map(fn (t) {
+            let { name, ty, default } = t;
+            let s = default.map_or("", fn (x) { " = \{dep_str(x, depth)}" })
+            "\{name}: \{ty}\{s}"
+          }).join(", ");
+          if (not(kwargs.is_empty()) && not(params.is_empty())) {
+            s = ", \{s}";
+          }
+          "(\{params}\{s})";
+        }
+        let ret = if (ty is Function(_, ret)) { "\{ret}" } else { "" };
+        let tyvars = if (tyvars.is_empty()) { "" } else { let s = tyvars.map(Typevar::to_string).join(", "); "[\{s}]" };
+        strs.push("fn\{tyvars} \{name}\{params} -> \{ret}")
+      }
+      let indent = String::make(@math.maximum(2 * depth - 2, 0), ' ');
+      let body = strs.join("  \{indent}\n");
+      "\{visible}trait\{tyvars} \{name} {\n  \{indent}\{body}\n\{indent}}"
     }
     EnumDecl(detail) => {
       let { name, entries, tyvars, deriving, vis, error: _, ext } = detail;
@@ -798,7 +841,7 @@ fn[K: Eq + Hash] cvt(map: Map[K, AST], f: (AST) -> AST) -> Map[K, AST] {
 }
 
 pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
-  let mapper = fn (x: AST) { x.map(f) }
+  let mapper = (x: AST) => x.map(f)
   f({ ..self, kind:
   match self.kind {
     FnDecl(detail) => FnDecl({ ..detail, body: detail.body.map(f), kwargs: detail.kwargs.map(fn (x) { { ..x, default: x.default.map(mapper) } }) })
@@ -808,6 +851,7 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     TupleAccess(x, v) => TupleAccess(x.map(f), v)
     TupleMake(arr) => TupleMake(arr.map(mapper))
     StructLet(pat, ast, ty) => StructLet(pat, ast.map(f), ty)
+    EnumLet(pat, ast, ty) => EnumLet(pat, ast.map(f), ty)
     GlobalDecl(detail) => GlobalDecl({ ..detail, init: detail.init.map(f) })
     If(cond, l, r) => If(cond.map(f), l.map(f), r.map(mapper))
     Binary(kind, l, r) => Binary(kind, l.map(f), r.map(f))
@@ -824,13 +868,13 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     Break(val) => Break(val.map(f))
     Continue(val) => Continue(val.map(mapper))
     While(cond, body, exit) => While(cond.map(f), body.map(f), exit.map(mapper))
-    For(inits, stop, steps, body, exit) => For(inits.map(fn (x) { (x.0, x.1.map(f)) }), stop.map(f), steps.map(fn (x) { (x.0, x.1.map(f)) }), body.map(f), exit.map(mapper))
+    For(inits, stop, steps, body, exit) => For(inits.map((x) => (x.0, x.1.map(f))), stop.map(f), steps.map((x) => (x.0, x.1.map(f))), body.map(f), exit.map(mapper))
     ForIn(indvar, range, body, exit) => ForIn(indvar, range.map(f), body.map(f), exit.map(mapper));
     EnumConstr(name, arr) => EnumConstr(name, arr.map(mapper))
     IncRange(x, y) => IncRange(x.map(f), y.map(f))
     ExcRange(x, y) => ExcRange(x.map(f), y.map(f))
     ArrAccess(x, y) => ArrAccess(x.map(f), y.map(f))
-    Match(matcher, arr) => Match(matcher.map(f), arr.map(fn (t) { (t.0, t.1.map(f)) }))
+    Match(matcher, arr) => Match(matcher.map(f), arr.map((x) => (x.0, x.1.map(f))))
     Fstr(vs) => Fstr(vs.map(mapper))
     Is(x, pat) => Is(x.map(f), pat)
     View(x, from, to) => View(x.map(f), from.map(f), to.map(f))
@@ -840,28 +884,24 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     StructDecl(_) | Double(_) | Float(_) | Str(_) |
     Unit | EnumDecl(_) | Bool(_) | Char(_) |
     Typealias(_) | Fnalias(_) | FFIBody(_) | Byte(_) |
-    ByteStr(_) => self.kind
+    ByteStr(_) | TraitDecl(_) => self.kind
   }
   });
 }
 
 pub fn AST::visit(self: AST, f: (AST) -> Unit) -> Unit {
-  self.map(fn (x) { f(x); x }) |> ignore;
+  self.map((x) => { f(x); x }) |> ignore;
 }
 
 pub fn AST::remove_leaf(self: AST) -> AST {
-  self.map(fn (x) {
-    match x {
-      { kind: Block(arr), .. } => { ..x, kind: Block(arr.filter(fn (x) { not(x.kind is Leaf) })) }
-      _ => x
-    }
+  self.map((x) => match x {
+    { kind: Block(arr), .. } => { ..x, kind: Block(arr.filter(fn (x) { not(x.kind is Leaf) })) }
+    _ => x
   })
 }
 
 pub fn AST::weaken(self: AST) -> AST {
-  self.map(fn (ast) {
-    { ..ast, ty: ast.ty.weaken() }
-  });
+  self.map((ast) => { ..ast, ty: ast.ty.weaken() });
 }
 
 pub fn AST::tidy(self: AST) -> AST {
@@ -869,7 +909,7 @@ pub fn AST::tidy(self: AST) -> AST {
 }
 
 pub fn Type::map(self: Type, f: (Type) -> Type) -> Type {
-  let mapper = fn (x: Type) { x.map(f) }
+  let mapper = (x: Type) => { x.map(f) }
   f(match self {
     Option(x) => Option(x.map(f))
     Tuple(arr) => Tuple(arr.map(mapper))
@@ -888,14 +928,14 @@ pub fn Type::map(self: Type, f: (Type) -> Type) -> Type {
 }
 
 pub fn Type::deweak(self: Type) -> Type {
-  self.map(fn {
+  self.map((x) => match x {
     Weak(x) => x.val;
     c => c
   });
 }
 
 pub fn Type::weaken(self: Type) -> Type {
-  self.map(fn {
+  self.map((x) => match x {
     Unknown => Weak(Ref::new(Unknown))
     c => c
   })

@@ -79,8 +79,8 @@ The outer braces are due to a `Block` node that encloses the whole file, which m
 
 ## Type checking
 
-Type checking support is currently very limited. Now everything in core/builtin is parsed successfully, but it remains to generate and parse `.mbti` files required for typing.
+Type checking support is currently very limited. It remains to generate and parse `.mbti` files required for typing.
 
 # Progress
 
-Currently the compiler is able to parse itself in entirety, and it can also parse everything in `core/builtin`.
+Currently the compiler is able to parse itself in entirety, and it can also parse most files in `core/builtin`.
