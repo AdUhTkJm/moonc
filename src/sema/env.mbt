@@ -1,5 +1,5 @@
 pub typealias @parse.(Type, Typevar, Name, PackDetail);
-typealias @parse.(AST, StructDetail, EnumDetail, TraitDetail, Visible, Kwarg);
+typealias @parse.(AST, StructDetail, EnumDetail, TraitDetail, AbstractDetail, Visible, Kwarg);
 typealias @utils.Map;
 typealias @diag.Loc;
 
@@ -32,7 +32,14 @@ pub(all) struct Env {
   _enums: Map[Name, EnumDetail]
   _globals: Map[Name, GlobalDecl]
   _fns: Map[Name, FnDetail]
-  _traits: Map[Name, TraitDetail];
+  _traits: Map[Name, TraitDetail]
+  _abstracts: Map[Name, AbstractDetail]
+  // Maps a short-hand name into its full name (or another name in `exposed`).
+  exposed: Map[Name, Name]
+  // We only map names of tyvars into the type itself.
+  tyvars: Map[String, Type]
+  // Also, map names to tyvars into the traits they'd need to implement.
+  tyvar_traits: Map[String, Array[Name]]
   curr_fn: Name?
   curr_for: AST?
   mut ast: AST
@@ -73,6 +80,10 @@ pub fn Env::empty() -> Env {
     _enums: Map::new(),
     _fns: Map::new(),
     _traits: Map::new(),
+    _abstracts: Map::new(),
+    exposed: Map::new(),
+    tyvars: Map::new(),
+    tyvar_traits: Map::new(),
     curr_fn: None,
     curr_for: None,
     ast: AST::leaf()
@@ -120,7 +131,7 @@ pub fn Env::method_ty(self: Env, sty: Name, name: String) -> Type? {
 /// the `.mbti` interface file.
 /// 
 pub fn Env::load(self: Env, detail: PackDetail) -> Unit {
-  let { fullname: _, referred, _fns, _structs, _enums, _impls, _traits } = detail;
+  let { fullname, referred, _fns, _structs, _enums, _impls, _traits, _abstracts } = detail;
   for _fn in _fns {
     let name = _fn.name.pack(referred);
     self._fns[name] = {
@@ -144,6 +155,35 @@ pub fn Env::load(self: Env, detail: PackDetail) -> Unit {
     let name = _trait.name.pack(referred);
     self._traits[name] = { .._trait, name };
   }
-  println(self._fns.keys());
+  for _abstract in _abstracts {
+    let name = _abstract.name.pack(referred);
+    self._abstracts[name] = { .._abstract, name };
+  }
   // TODO: impls
+
+  if (fullname == "moonbitlang/core/builtin") {
+    for _fn in _fns {
+      self.exposed[_fn.name] = _fn.name.pack(referred);
+    }
+    for _enum in _enums {
+      self.exposed[_enum.name] = _enum.name.pack(referred);
+    }
+    for _struct in _structs {
+      self.exposed[_struct.name] = _struct.name.pack(referred);
+    }
+    for _trait in _traits {
+      self.exposed[_trait.name] = _trait.name.pack(referred);
+    }
+    for _abstract in _abstracts {
+      self.exposed[_abstract.name] = _abstract.name.pack(referred);
+    }
+  }
+}
+
+pub fn Env::resolve(self: Env, name: Name) -> Name {
+  if (not(self.exposed.contains(name))) {
+    return name;
+  }
+  self.exposed[name] = self.resolve(self.exposed[name]);
+  return self.exposed[name];
 }

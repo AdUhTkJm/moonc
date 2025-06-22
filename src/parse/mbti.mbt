@@ -9,6 +9,7 @@ pub struct PackDetail {
   _enums: Array[EnumDetail]
   _impls: Array[ImplDetail]
   _traits: Array[TraitDetail]
+  _abstracts: Array[AbstractDetail]
 }
 
 
@@ -139,6 +140,7 @@ pub fn Parser::mbti_toplevel(self: Parser) -> PackDetail {
   let _enums = [];
   let _impls = [];
   let _traits = [];
+  let _abstracts = [];
   let mut vis: Visible = Pub;
 
   while (not(self.eof())) {
@@ -158,13 +160,21 @@ pub fn Parser::mbti_toplevel(self: Parser) -> PackDetail {
       }
       Type => {
         let ast = self.tydecl(vis, None, false);
-        guard ast.kind is EnumDecl(detail)
-        _enums.push(detail);
+        if (ast.kind is EnumDecl(detail)) {
+          _enums.push(detail);
+        } else {
+          guard ast.kind is AbstractDecl(detail);
+          _abstracts.push(detail);
+        }
       }
       Suberror => {
         let ast = self.tydecl(vis, None, true);
-        guard ast.kind is EnumDecl(detail)
-        _enums.push(detail);
+        if (ast.kind is EnumDecl(detail)) {
+          _enums.push(detail);
+        } else {
+          guard ast.kind is AbstractDecl(detail);
+          _abstracts.push(detail);
+        }
       }
       Trait => {
         let ast = self.traitdecl(vis);
@@ -185,7 +195,7 @@ pub fn Parser::mbti_toplevel(self: Parser) -> PackDetail {
     }
   }
 
-  { fullname, referred, _fns, _structs, _enums, _impls, _traits };
+  { fullname, referred, _fns, _structs, _enums, _impls, _traits, _abstracts };
 }
 
 ///|

@@ -2,6 +2,7 @@ pub(all) enum Type {
   Named(Name, Array[Type])
   Struct(Name, Array[Type])
   Enum(Name, Array[Type])
+  Abstract(Name, Array[Type])
   FixedArray(Type)
   Function(Array[Type], Type)
   Tuple(Array[Type])
@@ -22,6 +23,7 @@ pub(all) enum Type {
   VirtualBase(Type)
   Error
 }
+
 pub impl Show for Type with to_string(self) -> String {
   match (self) {
     Int => "Int"
@@ -33,8 +35,8 @@ pub impl Show for Type with to_string(self) -> String {
     String => "String"
     Error => "Error"
     Long => "Long"
-    Named(x, []) | Struct(x, []) | Enum(x, []) => x.to_string()
-    Named(x, arr) | Struct(x, arr) | Enum(x, arr) => {
+    Named(x, []) | Struct(x, []) | Enum(x, []) | Abstract(x, []) => x.to_string()
+    Named(x, arr) | Struct(x, arr) | Enum(x, arr) | Abstract(x, arr) => {
       let s = arr.map(Type::to_string).join(", ")
       "\{x}[\{s}]"
     }
@@ -61,6 +63,17 @@ pub impl Show for Type with output(self, writer) -> Unit {
   writer.write_string(self.to_string());
 }
 
+pub fn Type::verbose(self: Type) -> String {
+  match self {
+    Struct(_) => "struct \{self.to_string()}"
+    Enum(_) => "enum \{self.to_string()}"
+    Abstract(_) => "abstract type \{self.to_string()}"
+    Named(_) => "unresolved user-defined type \{self.to_string()}"
+    Unknown => "unknown type"
+    _ => self.to_string()
+  }
+}
+
 pub fn Type::map(self: Type, f: (Type) -> Type) -> Type {
   let mapper = (x: Type) => { x.map(f) }
   f(match self {
@@ -71,6 +84,7 @@ pub fn Type::map(self: Type, f: (Type) -> Type) -> Type {
     Enum(name, arr) => Enum(name, arr.map(mapper))
     Struct(name, arr) => Struct(name, arr.map(mapper))
     Named(name, arr) => Named(name, arr.map(mapper))
+    Abstract(name, arr) => Abstract(name, arr.map(mapper))
     Weak(x) => Weak({ val: x.val.map(f) })
     HasError(x, y) => HasError(x.map(f), y.map(f))
     MayError(x) => MayError(x.map(f))
@@ -134,6 +148,7 @@ pub fn Type::name(self: Type) -> Option[Name] {
     Enum(x, _) => Some(x)
     Struct(x, _) => Some(x)
     Named(x, _) => Some(x)
+    Abstract(x, _) => Some(x)
     Error => builtin("Error")
     HasError(x, _) => x.name()
     MayError(x) => x.name()

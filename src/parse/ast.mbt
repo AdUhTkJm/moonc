@@ -69,12 +69,25 @@ pub fn Name::qualified(pack: Option[String], ns: String, x: String) -> Name {
   { pack: pack, ns: Some(ns), name: x }
 }
 
+///|
+/// Returns a new name with `self`'s name and namespace, and the given package.
+/// 
 pub fn Name::pack(self: Name, pack: String) -> Name {
   { ..self, pack: Some(pack) }
 }
 
+///|
+/// Returns a new name without any package, but name and namespace remains unchanged.
+/// 
 pub fn Name::unpack(self: Name) -> Name {
   { ..self, pack: None }
+}
+
+///|
+/// Returns true if the name does not have any namespace or package specified.
+/// 
+pub fn Name::standalone(self: Name) -> Bool {
+  return self.ns is None && self.pack is None;
 }
 
 pub struct StructEntry {
@@ -102,6 +115,14 @@ pub(all) struct EnumDetail {
   entries: Map[String, EnumEntry]
   vis: Visible
   deriving: Array[Name]
+  tyvars: Array[Typevar]
+  name: Name
+  error: Bool
+  ext: String?
+}
+
+pub(all) struct AbstractDetail {
+  vis: Visible
   tyvars: Array[Typevar]
   name: Name
   error: Bool
@@ -289,6 +310,7 @@ pub(all) enum ASTType {
   TupleMake(Array[AST])
   GlobalDecl(GlobalDetail)
   EnumDecl(EnumDetail)
+  AbstractDecl(AbstractDetail)
   EnumConstr(Name, Array[AST])
   If(AST, AST, Option[AST])
   Binary(BinaryKind, AST, AST)
@@ -642,6 +664,14 @@ fn dep_str(ast: AST, depth: Int) -> String {
       let ext = if (ext is Some(w)) { "extern \"\{w}\"" } else { "" };
       "\{visible}\{ext}enum \{name}\{tyvars} {\n  \{indent}\{fields}\n\{indent}}\{deriving}";
     }
+    AbstractDecl(detail) => {
+      let { name, tyvars, vis, error, ext } = detail;
+      let visible = if (vis == Priv) { "" } else { "\{vis} " };
+      let tyvars = if (tyvars.is_empty()) { "" } else { let s = tyvars.map(Typevar::to_string).join(", "); "[\{s}]" };
+      let ext = if (ext is Some(w)) { "extern \"\{w}\"" } else { "" };
+      let ty = if (error) { "suberror" } else { "type" }
+      "\{visible}\{ext}\{ty} \{name}\{tyvars}";
+    }
     StructInit(map) => {
       let fields = map.to_array().map(fn (t) {
         let (x, y) = t;
@@ -823,7 +853,7 @@ pub fn AST::map(self: AST, f: (AST) -> AST) -> AST {
     StructDecl(_) | Double(_) | Float(_) | Str(_) |
     Unit | EnumDecl(_) | Bool(_) | Char(_) |
     Typealias(_) | Fnalias(_) | FFIBody(_) | Byte(_) |
-    ByteStr(_) | TraitDecl(_) => self.kind
+    ByteStr(_) | TraitDecl(_) | AbstractDecl(_) => self.kind
   }
   });
 }

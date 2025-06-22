@@ -2,14 +2,26 @@ fn builtin(x: String) -> Name {
   { pack: Some("@builtin"), ns: None, name: x }
 }
 
+///|
+/// Looks up a type with the given name in the current typing environment.
+/// 
+/// The type variables are not looked up; they're directly stuck into the type.
+/// 
 pub fn Env::lookup_type(self: Env, name: Name, tyvars: Array[Type]) -> Type {
-  if (self._structs.contains(name)) {
-    Struct(name, tyvars)
-  } else if (self._enums.contains(name)) {
-    Enum(name, tyvars)
-  } else {
-    Unknown
+  let name = self.resolve(name);
+  if (name.standalone() && self.tyvars.contains(name.name)) {
+    return self.tyvars[name.name];
   }
+  if (self._structs.contains(name)) {
+    return Struct(name, tyvars);
+  }
+  if (self._enums.contains(name)) {
+    return Enum(name, tyvars);
+  }
+  if (self._abstracts.contains(name)) {
+    return Abstract(name, tyvars);
+  }
+  Unknown
 }
 
 pub fn Env::new_local(self: Env, x: AST) -> Unit {
@@ -43,7 +55,8 @@ pub fn Env::get_local_opt(self: Env, x: String) -> Type? {
   self._locals.get(x).map(fn (x) { x.ty })
 }
 
-pub fn unify(x: Type, y: Type, from: Loc, to: Loc) -> Type {
+pub fn Env::unify(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Type {
+  println("unifying \{x.verbose()} with \{y.verbose()}")
   match (x, y) {
     (Weak(x), Weak(y)) => {
       if (not(x.val is Unknown) && not(y.val is Unknown)) {
@@ -71,23 +84,38 @@ pub fn unify(x: Type, y: Type, from: Loc, to: Loc) -> Type {
       if (x.length() != y.length()) {
         @diag.error(from, to, "tuples don't have the same size");
       } else {
-        x.eachi(fn (i, z) { unify(z, y[i], from, to) |> ignore });
+        x.eachi(fn (i, z) { self.unify(z, y[i], from, to) |> ignore });
       }
       Tuple(x)
     }
-    (FixedArray(x), FixedArray(y)) => unify(x, y, from, to);
-    (Struct(name, arr), Struct(name2, arr2)) => {
+    (a, Named(b, arr)) | (Named(b, arr), a) => {
+      self.unify(a, self.lookup_type(b, arr), from, to);
+    }
+    (FixedArray(x), FixedArray(y)) => self.unify(x, y, from, to);
+    (Struct(name, arr), Struct(name2, arr2)) |
+    (Abstract(name, arr), Struct(name2, arr2)) |
+    (Struct(name, arr), Abstract(name2, arr2)) => {
+      let name = self.resolve(name);
+      let name2 = self.resolve(name2);
       if (name != name2) {
         @diag.error(from, to, "structs do not have the same name");
       } else {
         for i, v in arr {
-          unify(v, arr2[i], from, to) |> ignore;
+          self.unify(v, arr2[i], from, to) |> ignore;
         }
       }
       Struct(name, arr)
     }
+    (Typevar(a), b) | (b, Typevar(a)) => {
+      if (self.tyvars.contains(a.name)) {
+        // TODO: check `a.extend` are correctly implemented
+        return self.unify(self.tyvars[a.name], b, from, to);
+      }
+      println("unknown typevar")
+      panic();
+    }
     _ => {
-      @diag.error(from, to, "cannot unify type \{x} with \{y}");
+      @diag.error(from, to, "cannot unify \{x.verbose()} with \{y.verbose()}");
       Unknown
     }
   }
@@ -103,14 +131,14 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
     Double(_) => Double
     Str(_) => String
     Guard(cond, other) => {
-      unify(self.infer(cond), Bool, cond.from, cond.to) |> ignore;
+      self.unify(self.infer(cond), Bool, cond.from, cond.to) |> ignore;
       if (other is Some(other)) {
-        unify(self.infer(other), Unit, other.from, other.to) |> ignore;
+        self.unify(self.infer(other), Unit, other.from, other.to) |> ignore;
       }
       Unit
     }
     Binary(kind, l, r) => {
-      unify(self.infer(l), self.infer(r), x.from, x.to) |> ignore;
+      self.unify(self.infer(l), self.infer(r), x.from, x.to) |> ignore;
       match kind {
         And | Or | Lt | Le | Eq | Ne => Bool
         Assign => Unit
@@ -118,18 +146,18 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       }
     }
     VarDecl(detail) => {
-      x.ty = unify(x.ty, self.infer(detail.init), x.from, x.to);
+      x.ty = self.unify(x.ty, self.infer(detail.init), x.from, x.to);
       self.new_local(x);
       Unit
     }
     VarRef(name) => {
       if (name.ns is None && name.pack is None) {
         if (self._locals.contains(name.name)) {
-          x.ty = unify(x.ty, self.get_local(name.name), x.from, x.to);
+          x.ty = self.unify(x.ty, self.get_local(name.name), x.from, x.to);
           return x.ty;
         }
         if (self._fns.contains(name)) {
-          x.ty = unify(x.ty, self._fns[name].ty, x.from, x.to);
+          x.ty = self.unify(x.ty, self._fns[name].ty, x.from, x.to);
           return x.ty;
         }
       }
@@ -141,11 +169,11 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
         c.ty = self.infer(c);
       }
       if (arr.length() == 0) {
-        x.ty = unify(x.ty, Unit, x.from, x.to);
+        x.ty = self.unify(x.ty, Unit, x.from, x.to);
         Unit
       } else {
         let ty = self.infer(arr.last().unwrap());
-        x.ty = unify(x.ty, ty, x.from, x.to);
+        x.ty = self.unify(x.ty, ty, x.from, x.to);
         x.ty
       }
     }
@@ -156,8 +184,12 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       detail.params.eachi(fn (i, param) {
         env.add_local(param, get(i))
       });
+      for tyvar in detail.tyvars {
+        env.tyvars[tyvar.name] = Type::weak();
+        env.tyvar_traits[tyvar.name] = tyvar.extend;
+      }
       guard self._fns[detail.name].ty is Function(_, ret);
-      unify(ret, env.infer(detail.body), x.from, x.to) |> ignore;
+      self.unify(ret, env.infer(detail.body), x.from, x.to) |> ignore;
       x.ty
     }
     Call(func, args, _named) => {
@@ -168,7 +200,7 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
         if (argtys.length() != params.length()) {
           @diag.error(x.from, x.to, "expected \{params.length()} arguments, but got \{argtys.length()}");
         } else {
-          params.eachi(fn (i, t) { args[i].ty = unify(argtys[i], t, args[i].from, args[i].to) });
+          params.eachi(fn (i, t) { args[i].ty = self.unify(argtys[i], t, args[i].from, args[i].to) });
         }
         ret
       } else if (fty is Weak(x)) {
@@ -180,22 +212,22 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       }
     }
     If(cond, body, other) => {
-      cond.ty = unify(self.infer(cond), Bool, cond.from, cond.to);
+      cond.ty = self.unify(self.infer(cond), Bool, cond.from, cond.to);
       let t1 = self.infer(body);
       if (other is Some(z)) {
         let t2 = self.infer(z);
-        let t = unify(t1, t2, x.from, x.to);
+        let t = self.unify(t1, t2, x.from, x.to);
         body.ty = t; z.ty = t;
         t
       } else {
-        body.ty = unify(t1, Unit, body.from, body.to);
+        body.ty = self.unify(t1, Unit, body.from, body.to);
         Unit
       }
     }
     Return(val) => {
       if (self.curr_fn is Some(name)) {
         guard self._fns[name].ty is Function(_, ret);
-        x.ty = unify(ret, if (val is Some(val)) { self.infer(val) } else { Unit }, x.from, x.to);
+        x.ty = self.unify(ret, if (val is Some(val)) { self.infer(val) } else { Unit }, x.from, x.to);
         Unit
       } else {
         @diag.error(x.from, x.to, "return type mismatch");
@@ -210,16 +242,16 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
         vars.add(_var);
         env.add_local(_var, self.infer(init));
       }
-      unify(env.infer(stop), Bool, stop.from, stop.to) |> ignore;
+      self.unify(env.infer(stop), Bool, stop.from, stop.to) |> ignore;
       for step in steps {
         let (_var, init) = step;
         if (not(vars.contains(_var))) {
           @diag.error(init.from, init.to, "unknown induction variable: \{_var}");
         } else {
-          init.ty = unify(env._locals[_var].ty, env.infer(init), init.from, init.to);
+          init.ty = self.unify(env._locals[_var].ty, env.infer(init), init.from, init.to);
         }
       }
-      body.ty = unify(env.infer(body), Unit, body.from, body.to);
+      body.ty = self.unify(env.infer(body), Unit, body.from, body.to);
       // TODO: break-carried result
       if (exit is Some(exit)) {
         exit.ty = env.infer(exit);
@@ -245,10 +277,10 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       let mut good = true;
       if (vars.length() == 1) {
         if (self.method_ty(lname, "iter") is Some(Function(args, ret)) && args.length() == 1) {
-          unify(args[0], lty, list.from, list.to) |> ignore;
+          self.unify(args[0], lty, list.from, list.to) |> ignore;
           let t = Type::weak();
-          let itert: Type = Enum(builtin("Iter"), [t]);
-          unify(ret, itert, list.from, list.to) |> ignore;
+          let itert: Type = Struct(builtin("Iter"), [t]);
+          self.unify(ret, itert, list.from, list.to) |> ignore;
           env.add_local(vars[0], t.deweak());
         } else {
           good = false;
@@ -257,11 +289,11 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       }
       if (vars.length() == 2) {
         if (self.method_ty(lname, "iter2") is Some(Function(args, ret)) && args.length() == 1) {
-          unify(args[0], lty, list.from, list.to) |> ignore;
+          self.unify(args[0], lty, list.from, list.to) |> ignore;
           let p = Type::weak();
           let q = Type::weak();
-          let iter2: Type = Enum(builtin("Iter2"), [p, q]);
-          unify(ret, iter2, list.from, list.to) |> ignore;
+          let iter2: Type = Struct(builtin("Iter2"), [p, q]);
+          self.unify(ret, iter2, list.from, list.to) |> ignore;
           env.add_local(vars[0], p);
           env.add_local(vars[1], q);
         } else {
@@ -299,7 +331,7 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
         return Unit;
       }
       arr.eachi((i, expr) => {
-        expr.ty = unify(self.infer(expr), tys[i], expr.from, expr.to);
+        expr.ty = self.unify(self.infer(expr), tys[i], expr.from, expr.to);
       });
       Unit
     }
@@ -307,7 +339,7 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       // Verify `begin` and `end` have the same type.
       let bty = self.infer(begin);
       let ety = self.infer(end);
-      unify(bty, ety, x.from, x.to) |> ignore;
+      self.unify(bty, ety, x.from, x.to) |> ignore;
 
       // They must both be either Int or Int64.
       let deweak = bty.deweak();

@@ -1992,6 +1992,12 @@ pub fn Parser::tydecl(self: Parser, vis: Visible, ext: String?, error: Bool) -> 
   }
 
   let deriving = self.deriving();
+  if (tys.is_empty()) {
+    let detail = AbstractDetail :: {
+      name, tyvars, error, ext, vis
+    }
+    return AST::new(AbstractDecl(detail), from, self.loc())
+  }
 
   let detail = EnumDetail :: {
     entries: Map::from_array([("__mem", { tys, named: Map::new() })]),
