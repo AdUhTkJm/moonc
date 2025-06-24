@@ -51,7 +51,6 @@ pub fn Env::get_local_opt(self: Env, x: String) -> Type? {
 }
 
 fn Env::unify_aux(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Type {
-  println("unifying \{x.verbose()} with \{y.verbose()}")
   match (x, y) {
     (Weak(x), Weak(y)) => {
       if (x.val is Unknown && y.val is Unknown) {
@@ -127,12 +126,11 @@ fn Env::unify_aux(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Type {
   }
 }
 
-pub fn Env::unify(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Type {
+pub fn Env::unify(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Unit {
   // Preserve self.tyvars.
   let t = self.tyvars.clone();
-  let ty = self.unify_aux(x, y, from, to);
+  let _ = self.unify_aux(x, y, from, to);
   self.tyvars = t;
-  return ty;
 }
 
 pub fn Env::infer(self: Env, x: AST) -> Type {
@@ -165,15 +163,16 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       Unit
     }
     VarRef(name) => {
+      let name = self.resolve(name);
       if (name.ns is None && name.pack is None) {
         if (self._locals.contains(name.name)) {
-          x.ty = self.unify(x.ty, self.get_local(name.name), x.from, x.to);
+          self.unify(x.ty, self.get_local(name.name), x.from, x.to);
           return x.ty;
         }
-        if (self._fns.contains(name)) {
-          x.ty = self.unify(x.ty, self._fns[name].ty, x.from, x.to);
-          return x.ty;
-        }
+      }
+      if (self._fns.contains(name)) {
+        self.unify(x.ty, self._fns[name].ty, x.from, x.to);
+        return x.ty;
       }
       @diag.error(x.from, x.to, "unknown identifier: \{name}");
       Unknown
@@ -183,11 +182,11 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
         c.ty = self.infer(c);
       }
       if (arr.length() == 0) {
-        x.ty = self.unify(x.ty, Unit, x.from, x.to);
+        self.unify(x.ty, Unit, x.from, x.to);
         Unit
       } else {
         let ty = self.infer(arr.last().unwrap());
-        x.ty = self.unify(x.ty, ty, x.from, x.to);
+        self.unify(x.ty, ty, x.from, x.to);
         x.ty
       }
     }
@@ -214,7 +213,7 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
         if (argtys.length() != params.length()) {
           @diag.error(x.from, x.to, "expected \{params.length()} arguments, but got \{argtys.length()}");
         } else {
-          params.eachi(fn (i, t) { args[i].ty = self.unify(argtys[i], t, args[i].from, args[i].to) });
+          params.eachi(fn (i, t) { self.unify(argtys[i], t, args[i].from, args[i].to) });
         }
         ret
       } else if (fty is Weak(x)) {
@@ -226,22 +225,21 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       }
     }
     If(cond, body, other) => {
-      cond.ty = self.unify(self.infer(cond), Bool, cond.from, cond.to);
+      self.unify(self.infer(cond), Bool, cond.from, cond.to);
       let t1 = self.infer(body);
       if (other is Some(z)) {
         let t2 = self.infer(z);
-        let t = self.unify(t1, t2, x.from, x.to);
-        body.ty = t; z.ty = t;
-        t
+        self.unify(t1, t2, x.from, x.to);
+        t1
       } else {
-        body.ty = self.unify(t1, Unit, body.from, body.to);
+        self.unify(t1, Unit, body.from, body.to);
         Unit
       }
     }
     Return(val) => {
       if (self.curr_fn is Some(name)) {
         guard self._fns[name].ty is Function(_, ret);
-        x.ty = self.unify(ret, if (val is Some(val)) { self.infer(val) } else { Unit }, x.from, x.to);
+        self.unify(ret, if (val is Some(val)) { self.infer(val) } else { Unit }, x.from, x.to);
         Unit
       } else {
         @diag.error(x.from, x.to, "return type mismatch");
@@ -262,10 +260,10 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
         if (not(vars.contains(_var))) {
           @diag.error(init.from, init.to, "unknown induction variable: \{_var}");
         } else {
-          init.ty = self.unify(env._locals[_var].ty, env.infer(init), init.from, init.to);
+          self.unify(env._locals[_var].ty, env.infer(init), init.from, init.to);
         }
       }
-      body.ty = self.unify(env.infer(body), Unit, body.from, body.to);
+      self.unify(env.infer(body), Unit, body.from, body.to);
       // TODO: break-carried result
       if (exit is Some(exit)) {
         exit.ty = env.infer(exit);
@@ -275,6 +273,7 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
     ForIn(vars, list, body, exit) => {
       if (vars.length() >= 3) {
         @diag.error(x.from, x.to, "for .. in supports at most 2 variables");
+        x.ty = Unit;
         return Unit;
       }
 
@@ -284,6 +283,7 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       let lname = lty.name();
       if (lname is None) {
         @diag.error(list.from, list.to, "must have a proper iter() method");
+        x.ty = Unit;
         return Unit;
       }
 
@@ -321,7 +321,6 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       if (self.curr_for is Some({ kind: For(starts, _, _, _, _), ..})) {
         tys = starts.map(x => self._locals[x.0].ty);
       } else if (self.curr_for is Some({ kind: ForIn(starts, _, _, _), .. }) ) {
-        println(x);
         tys = starts.map(x => self._locals[x].ty)
       }
 
@@ -330,7 +329,7 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
         return Unit;
       }
       arr.eachi((i, expr) => {
-        expr.ty = self.unify(self.infer(expr), tys[i], expr.from, expr.to);
+        self.unify(self.infer(expr), tys[i], expr.from, expr.to);
       });
       Unit
     }
@@ -348,6 +347,32 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
 
       Struct(builtin("Iter"), [deweak]);
     }
+    While(cond, body, exit) => {
+      self.unify(self.infer(cond), Bool, cond.from, cond.to);
+      // TODO: break-carried result
+      self.unify(self.infer(body), Unit, body.from, body.to);
+      if (exit is Some(exit)) {
+        exit.ty = self.infer(exit);
+        exit.ty
+      } else {
+        Unknown
+      }
+    }
+    Arr(inits) => {
+      if (inits.is_empty()) {
+        let weak = Type::weak();
+        x.ty = Struct(builtin("Array"), [weak]);
+        return x.ty;
+      }
+      let fst = inits[0];
+      let ty = self.infer(fst);
+      for i in 1..<inits.length() {
+        self.unify(self.infer(inits[i]), ty, inits[i].from, inits[i].to);
+      }
+      return Struct(builtin("Array"), [ty]);
+    }
+    // TODO: break-carried results
+    Break(_) => Unit
     // View(_) => ...
     // Fnalias(_) => ...
     // Typealias(_) => ...
@@ -355,10 +380,6 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
     // Is(_) => ...
     // ArrAccess(_) => ...
     // Match(_) => ...
-    // For(_) => ...
-    // While(_) => ...
-    // Break(_) => ...
-    // Arr(_) => ...
     // Fstr(_) => ...
     // ThisCall(_) => ...
     // FieldRef(_) => ...
@@ -387,6 +408,7 @@ pub fn Env::check(self: Env) -> AST {
   self.infer(self.ast) |> ignore;
   self.ast.map((x) => { match x.kind {
     VarDecl(detail) => { ..x, kind: VarDecl({ ..detail, ty: detail.ty.deweak() }), ty: x.ty.deweak() };
+    FnDecl(detail) => { ..x, kind: FnDecl({ ..detail, ty: detail.ty.deweak() }), ty: x.ty.deweak() };
     _ => { ..x, ty: x.ty.deweak() }
   } });
 }

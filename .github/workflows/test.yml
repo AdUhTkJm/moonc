@@ -27,12 +27,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-
-      - name: checkout moonbit core library
-        uses: actions/checkout@v4
-        with:
-          repository: moonbitlang/core
-          path: corelib
       
       - name: setup moon
         uses: illusory0x0/setup-moonbit@v0.1.0

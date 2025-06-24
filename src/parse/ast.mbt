@@ -150,7 +150,7 @@ pub struct Kwarg {
   default: AST?
 } derive (Show)
 
-pub struct FnDetail {
+pub(all) struct FnDetail {
   vis: Visible
   name: Name
   params: Array[String]
@@ -161,7 +161,7 @@ pub struct FnDetail {
   ext: String?
 }
 
-pub struct ImplDetail {
+pub(all) struct ImplDetail {
   vis: Visible
   ntrait: Name
   nstruct: Type

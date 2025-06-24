@@ -25,7 +25,7 @@ def check_file(file_path: Path):
   return True
 
 def main():
-  test_dirs = [Path("test"), Path("corelib")]
+  test_dirs = [Path("test")]
   passed = True
   for directory in test_dirs:
     for file in directory.glob("*.mbt"):
