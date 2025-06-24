@@ -1699,7 +1699,7 @@ pub fn Parser::fndecl(self: Parser, vis: Visible, ext: String?) -> AST {
     self.block();
   }
   
-  let ty = Function(argTys, retTy);
+  let ty = Function(argTys, retTy).variate(tyvars);
   let ast = AST::new(FnDecl({ vis, name, params, tyvars, body, ty, kwargs, ext }), from, self.loc());
   ast.attr = self.attr;
   self.attr.clear();
@@ -1729,7 +1729,7 @@ pub fn Parser::structdecl(self: Parser, vis: Visible, ext: String?) -> AST {
 
     let name = self.expect_ident();
     self.expect(Colon);
-    let ty = self.typename();
+    let ty = self.typename().variate(tyvars);
     fields.push({ name, ty, mutable, vis });
     if (not(self.peek().isa(RBrace))) {
       self.semicolon();
@@ -1765,7 +1765,7 @@ pub fn Parser::enumdecl(self: Parser, vis: Visible, ext: String?) -> AST {
     // No newline allowed.
     if (self.check(LPar)) {
       while (not(self.check(RPar)) && not(self.eof())) {
-        let ty = self.typename();
+        let ty = self.typename().variate(tyvars);
         tys.push(ty);
         if (not(self.peek().isa(RPar))) {
           self.expect(Comma);
@@ -1888,7 +1888,7 @@ pub fn Parser::impldecl(self: Parser, vis: Visible, ext: String?) -> AST {
     let argname = self.expect_idents();
     let mut ty = Type::Unknown;
     if (self.checks(Colon)) {
-      ty = self.typename();
+      ty = self.typename().variate(tyvars);
     }
     params.push(argname);
     argTys.push(ty);
@@ -1902,7 +1902,7 @@ pub fn Parser::impldecl(self: Parser, vis: Visible, ext: String?) -> AST {
   let mut retTy = Type::Unknown;
   self.strip();
   if (self.check(Arrow)) {
-    retTy = self.typename();
+    retTy = self.typename().variate(tyvars);
   }
 
   let body = if (self.checks(Assign)) {

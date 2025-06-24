@@ -60,9 +60,9 @@ pub fn Parser::mbti_fn(self: Parser, vis: Visible) -> FnDetail {
         @diag.error(loc, self.loc(), "modifiers '~' and '=' cannot appear together")
       }
       self.expects(Colon);
-      ty = self.typename();
+      ty = self.typename().variate(tyvars);
     } else {
-      ty = self.typename();
+      ty = self.typename().variate(tyvars);
     }
     
     if (is_kwarg) {
@@ -96,7 +96,7 @@ pub fn Parser::mbti_fn(self: Parser, vis: Visible) -> FnDetail {
   retTy = self.typename();
   
 
-  let ty = Function(argTys, retTy);
+  let ty = Function(argTys, retTy).variate(tyvars);
   let body = AST::new(Block([]), Loc::unknown(), Loc::unknown());
   return { vis, name, params, tyvars, body, ty, kwargs, ext: None };
 }

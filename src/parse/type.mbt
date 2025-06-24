@@ -70,6 +70,7 @@ pub fn Type::verbose(self: Type) -> String {
     Abstract(_) => "abstract type \{self.to_string()}"
     Named(_) => "unresolved user-defined type \{self.to_string()}"
     Unknown => "unknown type"
+    Typevar(_) => "type variable \{self.to_string()}"
     _ => self.to_string()
   }
 }
@@ -100,7 +101,7 @@ pub fn Type::map(self: Type, f: (Type) -> Type) -> Type {
 /// 
 pub fn Type::deweak(self: Type) -> Type {
   self.map((x) => match x {
-    Weak(x) => x.val;
+    Weak(x) => x.val.deweak();
     c => c
   });
 }
@@ -156,6 +157,9 @@ pub fn Type::name(self: Type) -> Option[Name] {
   }
 }
 
+///|
+/// Resolves the name `Self`.
+/// 
 pub fn Type::resolve_self(self: Type, ns: String?) -> Type {
   if (ns is None) {
     return self;
@@ -164,6 +168,22 @@ pub fn Type::resolve_self(self: Type, ns: String?) -> Type {
   self.map((ty) => match ty {
     Named({ name: "Self", pack, ns: None }, args) =>
       Named({ name: ns, pack, ns: None }, args)
+    c => c
+  });
+}
+
+///|
+/// Given a list of type variables, replace all named types in the list with a `Typevar`.
+/// 
+pub fn Type::variate(self: Type, tyvars: Array[Typevar]) -> Type {
+  self.map((ty) => match ty {
+    Named({ name: x, pack: None, ns: None }, []) => {
+      let ind = tyvars.map((x) => x.name).search(x);
+      if (ind is Some(w)) {
+        return Typevar(tyvars[w]);
+      }
+      ty
+    }
     c => c
   });
 }

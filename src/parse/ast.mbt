@@ -129,7 +129,7 @@ pub(all) struct AbstractDetail {
   ext: String?
 }
 
-pub struct GlobalDetail {
+pub(all) struct GlobalDetail {
   vis: Visible
   name: Name
   init: AST
@@ -137,7 +137,7 @@ pub struct GlobalDetail {
   ext: String?
 }
 
-pub struct LocalDetail {
+pub(all) struct LocalDetail {
   name: String
   init: AST
   mutable: Bool

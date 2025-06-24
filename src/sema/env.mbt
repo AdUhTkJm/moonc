@@ -37,7 +37,7 @@ pub(all) struct Env {
   // Maps a short-hand name into its full name (or another name in `exposed`).
   exposed: Map[Name, Name]
   // We only map names of tyvars into the type itself.
-  tyvars: Map[String, Type]
+  mut tyvars: Map[String, Type]
   // Also, map names to tyvars into the traits they'd need to implement.
   tyvar_traits: Map[String, Array[Name]]
   curr_fn: Name?

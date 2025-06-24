@@ -26,13 +26,8 @@ pub fn Env::lookup_type(self: Env, name: Name, tyvars: Array[Type]) -> Type {
 
 pub fn Env::new_local(self: Env, x: AST) -> Unit {
   guard x.kind is VarDecl(detail);
-  if (x.ty is Weak(v)) {
-    let ty = self.infer(detail.init);
-    x.ty = ty; v.val = ty;
-    self._locals[detail.name] = { name: detail.name, mutable: detail.mutable, ty }
-    return;
-  }
-  if (x.ty is Named(n, tyvars)) {
+  let detail_ty = detail.ty.deweak();
+  if (detail_ty is Named(n, tyvars)) {
     let ty = self.lookup_type(n, tyvars);
     if (ty is Unknown) {
       @diag.error(x.from, x.to, "unknown type \{n}")
@@ -40,7 +35,7 @@ pub fn Env::new_local(self: Env, x: AST) -> Unit {
     self._locals[detail.name] = { name: detail.name, mutable: detail.mutable, ty }
     return;
   }
-  self._locals[detail.name] = { name: detail.name, mutable: detail.mutable, ty: x.ty }
+  self._locals[detail.name] = { name: detail.name, mutable: detail.mutable, ty: detail_ty }
 }
 
 pub fn Env::add_local(self: Env, name: String, ty: Type) -> Unit {
@@ -55,26 +50,36 @@ pub fn Env::get_local_opt(self: Env, x: String) -> Type? {
   self._locals.get(x).map(fn (x) { x.ty })
 }
 
-pub fn Env::unify(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Type {
+fn Env::unify_aux(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Type {
   println("unifying \{x.verbose()} with \{y.verbose()}")
   match (x, y) {
     (Weak(x), Weak(y)) => {
+      if (x.val is Unknown && y.val is Unknown) {
+        return Weak(x);
+      }
       if (not(x.val is Unknown) && not(y.val is Unknown)) {
         @diag.error(from, to, "type \{x} is not \{y}");
-        Unknown
-      } else if (not(x.val is Unknown)) {
+        return Unknown;
+      }
+      if (not(x.val is Unknown)) {
         x.val = x.val.deweak();
         y.val = x.val;
-        x.val
-      } else {
-        y.val = y.val.deweak();
-        x.val = y.val;
-        y.val
+        return x.val;
       }
+      y.val = y.val.deweak();
+      x.val = y.val;
+      return y.val;
     }
     (Weak(x), y) | (y, Weak(x)) => {
       x.val = y.deweak();
       x.val
+    }
+    (Typevar(a), b) | (b, Typevar(a)) => {
+      if (self.tyvars.contains(a.name)) {
+        // TODO: check `a.extend` are correctly implemented
+        return self.unify_aux(self.tyvars[a.name], b, from, to);
+      }
+      self.tyvars[a.name] = b; b
     }
     (Int, Int) => Int
     (Float, Float) => Float
@@ -84,14 +89,14 @@ pub fn Env::unify(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Type {
       if (x.length() != y.length()) {
         @diag.error(from, to, "tuples don't have the same size");
       } else {
-        x.eachi(fn (i, z) { self.unify(z, y[i], from, to) |> ignore });
+        x.eachi(fn (i, z) { self.unify_aux(z, y[i], from, to) |> ignore });
       }
       Tuple(x)
     }
     (a, Named(b, arr)) | (Named(b, arr), a) => {
-      self.unify(a, self.lookup_type(b, arr), from, to);
+      self.unify_aux(a, self.lookup_type(b, arr), from, to);
     }
-    (FixedArray(x), FixedArray(y)) => self.unify(x, y, from, to);
+    (FixedArray(x), FixedArray(y)) => self.unify_aux(x, y, from, to);
     (Struct(name, arr), Struct(name2, arr2)) |
     (Abstract(name, arr), Struct(name2, arr2)) |
     (Struct(name, arr), Abstract(name2, arr2)) => {
@@ -101,24 +106,33 @@ pub fn Env::unify(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Type {
         @diag.error(from, to, "structs do not have the same name");
       } else {
         for i, v in arr {
-          self.unify(v, arr2[i], from, to) |> ignore;
+          self.unify_aux(v, arr2[i], from, to) |> ignore;
         }
       }
       Struct(name, arr)
     }
-    (Typevar(a), b) | (b, Typevar(a)) => {
-      if (self.tyvars.contains(a.name)) {
-        // TODO: check `a.extend` are correctly implemented
-        return self.unify(self.tyvars[a.name], b, from, to);
+    (Function(args, ret), Function(args2, ret2)) => {
+      if (args.length() != args2.length()) {
+        @diag.error(from, to, "tuples don't have the same size");
+      } else {
+        args.eachi(fn (i, z) { self.unify_aux(z, args2[i], from, to) |> ignore });
+        self.unify_aux(ret, ret2, from, to) |> ignore;
       }
-      println("unknown typevar")
-      panic();
+      Function(args, ret)
     }
     _ => {
-      @diag.error(from, to, "cannot unify \{x.verbose()} with \{y.verbose()}");
+      @diag.error(from, to, "cannot unify_aux \{x.verbose()} with \{y.verbose()}");
       Unknown
     }
   }
+}
+
+pub fn Env::unify(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Type {
+  // Preserve self.tyvars.
+  let t = self.tyvars.clone();
+  let ty = self.unify_aux(x, y, from, to);
+  self.tyvars = t;
+  return ty;
 }
 
 pub fn Env::infer(self: Env, x: AST) -> Type {
@@ -146,7 +160,7 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       }
     }
     VarDecl(detail) => {
-      x.ty = self.unify(x.ty, self.infer(detail.init), x.from, x.to);
+      self.unify(detail.ty, self.infer(detail.init), x.from, x.to) |> ignore;
       self.new_local(x);
       Unit
     }
@@ -276,26 +290,11 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       guard lname is Some(lname);
       let mut good = true;
       if (vars.length() == 1) {
-        if (self.method_ty(lname, "iter") is Some(Function(args, ret)) && args.length() == 1) {
-          self.unify(args[0], lty, list.from, list.to) |> ignore;
+        if (self.method_ty(lname, "iter") is Some(func)) {
           let t = Type::weak();
           let itert: Type = Struct(builtin("Iter"), [t]);
-          self.unify(ret, itert, list.from, list.to) |> ignore;
+          self.unify(func, Function([lty], itert), list.from, list.to) |> ignore;
           env.add_local(vars[0], t.deweak());
-        } else {
-          good = false;
-          @diag.error(list.from, list.to, "must have a proper iter() method");
-        }
-      }
-      if (vars.length() == 2) {
-        if (self.method_ty(lname, "iter2") is Some(Function(args, ret)) && args.length() == 1) {
-          self.unify(args[0], lty, list.from, list.to) |> ignore;
-          let p = Type::weak();
-          let q = Type::weak();
-          let iter2: Type = Struct(builtin("Iter2"), [p, q]);
-          self.unify(ret, iter2, list.from, list.to) |> ignore;
-          env.add_local(vars[0], p);
-          env.add_local(vars[1], q);
         } else {
           good = false;
           @diag.error(list.from, list.to, "must have a proper iter() method");
@@ -347,7 +346,7 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
         @diag.error(x.from, x.to, "range expression not supported for this type");
       }
 
-      Struct(builtin("Iter"), [Int]);
+      Struct(builtin("Iter"), [deweak]);
     }
     // View(_) => ...
     // Fnalias(_) => ...
@@ -386,5 +385,8 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
 
 pub fn Env::check(self: Env) -> AST {
   self.infer(self.ast) |> ignore;
-  self.ast.map(fn (x) { { ..x, ty: x.ty.deweak() } });
+  self.ast.map((x) => { match x.kind {
+    VarDecl(detail) => { ..x, kind: VarDecl({ ..detail, ty: detail.ty.deweak() }), ty: x.ty.deweak() };
+    _ => { ..x, ty: x.ty.deweak() }
+  } });
 }
