@@ -52,26 +52,30 @@ pub fn Env::get_local_opt(self: Env, x: String) -> Type? {
 
 fn Env::unify_aux(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Type {
   match (x, y) {
+    (Weak({ val: Weak(_) as x }), y) | (y, Weak({ val: Weak(_) as x })) => {
+      self.unify_aux(x, y, from, to);
+    }
     (Weak(x), Weak(y)) => {
       if (x.val is Unknown && y.val is Unknown) {
+        x.val = Weak(y);
         return Weak(x);
       }
       if (not(x.val is Unknown) && not(y.val is Unknown)) {
-        @diag.error(from, to, "type \{x} is not \{y}");
-        return Unknown;
+        return self.unify_aux(x.val, y.val, from, to);
       }
       if (not(x.val is Unknown)) {
         x.val = x.val.deweak();
         y.val = x.val;
-        return x.val;
+        return Weak(x);
       }
       y.val = y.val.deweak();
       x.val = y.val;
-      return y.val;
+      return Weak(y);
     }
+    (Weak(x), Unknown) | (Unknown, Weak(x)) => Weak(x)
     (Weak(x), y) | (y, Weak(x)) => {
       x.val = y.deweak();
-      x.val
+      Weak(x)
     }
     (Typevar(a), b) | (b, Typevar(a)) => {
       if (self.tyvars.contains(a.name)) {
@@ -84,6 +88,7 @@ fn Env::unify_aux(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Type {
     (Float, Float) => Float
     (Bool, Bool) => Bool
     (Unit, Unit) => Unit
+    (String, String) => String
     (Tuple(x), Tuple(y)) => {
       if (x.length() != y.length()) {
         @diag.error(from, to, "tuples don't have the same size");
@@ -120,7 +125,7 @@ fn Env::unify_aux(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Type {
       Function(args, ret)
     }
     _ => {
-      @diag.error(from, to, "cannot unify_aux \{x.verbose()} with \{y.verbose()}");
+      @diag.error(from, to, "cannot unify \{x.verbose()} with \{y.verbose()}");
       Unknown
     }
   }
@@ -157,6 +162,10 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
         _ => l.ty
       }
     }
+    BinaryInplace(_, l, r) => {
+      self.unify(self.infer(l), self.infer(r), x.from, x.to) |> ignore;
+      Unit
+    }
     VarDecl(detail) => {
       self.unify(detail.ty, self.infer(detail.init), x.from, x.to) |> ignore;
       self.new_local(x);
@@ -192,22 +201,24 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
     }
     FnDecl(detail) => {
       let env = { ..self.clone(), curr_fn: Some(detail.name) };
-      let tys = if (x.ty is Function(tys, _)) { tys } else { [] };
+      let tys = if (detail.ty is Function(tys, _)) { tys } else { [] };
       fn get(i) { if (i >= tys.length()) { Type::Unknown } else { tys[i] } }
-      detail.params.eachi(fn (i, param) {
+      for i, param in detail.params {
         env.add_local(param, get(i))
-      });
+      };
       for tyvar in detail.tyvars {
         env.tyvars[tyvar.name] = Type::weak();
         env.tyvar_traits[tyvar.name] = tyvar.extend;
       }
       guard self._fns[detail.name].ty is Function(_, ret);
       self.unify(ret, env.infer(detail.body), x.from, x.to) |> ignore;
+      let tys = detail.params.map((x) => env._locals[x].ty);
+      detail.ty = Function(tys, ret);
       x.ty
     }
     Call(func, args, _named) => {
-      // how to deal with named?
-      let fty = self.infer(func);
+      // how to deal with named arguments?
+      let fty = self.infer(func).deweak();
       let argtys = args.map(fn (x) { self.infer(x) });
       if (fty is Function(params, ret)) {
         if (argtys.length() != params.length()) {
@@ -216,9 +227,6 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
           params.eachi(fn (i, t) { self.unify(argtys[i], t, args[i].from, args[i].to) });
         }
         ret
-      } else if (fty is Weak(x)) {
-        x.val = Function(argtys, Type::weak());
-        x.val
       } else {
         @diag.error(x.from, x.to, "calling a non-function type \{fty}");
         Unit
@@ -373,28 +381,33 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
     }
     // TODO: break-carried results
     Break(_) => Unit
-    // View(_) => ...
-    // Fnalias(_) => ...
-    // Typealias(_) => ...
-    // TupleAccess(_) => ...
-    // Is(_) => ...
-    // ArrAccess(_) => ...
-    // Match(_) => ...
-    // Fstr(_) => ...
-    // ThisCall(_) => ...
-    // FieldRef(_) => ...
-    // Unary(_) => ...
-    // BinaryInplace(_) => ...
-    // EnumConstr(_) => ...
-    // EnumDecl(_) => ...
-    // GlobalDecl(_) => ...
-    // TupleMake(_) => ...
-    // TupleDecl(_) => ...
-    // ParamDecl(_) => ...
-    // StructModif(_) => ...
-    // StructInit(_) => ...
-    // StructDecl(_) => ...
-    // ImplDecl(_) => ...
+    FieldRef(ast, name) => {
+      let ty = self.infer(ast).deweak();
+      let tyname = ty.name();
+      if (tyname is Some(w)) {
+        let tyname = self.resolve(w);
+        let field = self.field_type(tyname, name);
+        let metty = self.method_ty(tyname, name);
+        if (field is Some(field)) {
+          x.ty = field;
+          return field;
+        } else if (metty is Some(Function(args, ret))) {
+          // Bind `self` onto the function.
+          if (args.length() == 0) {
+            @diag.error(ast.from, ast.to, "member function \{field} of type \{ty} does not accept self");
+            return Unknown;
+          }
+          self.unify(args[0], ty, ast.from, ast.to);
+          x.ty = Function(args[1:].to_array(), ret);
+          return x.ty;
+        } else {
+          @diag.error(ast.from, ast.to, "type \{ty} does not have field \{field}");
+        }
+      } else {
+        @diag.error(ast.from, ast.to, "type \{ty} does not have any field");
+      }
+      Unknown
+    }
     _ => {
       println(x);
       panic()

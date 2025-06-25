@@ -180,10 +180,26 @@ pub fn Env::load(self: Env, detail: PackDetail) -> Unit {
   }
 }
 
+///|
+/// Resolves (canonicalizes) the name.
+/// 
 pub fn Env::resolve(self: Env, name: Name) -> Name {
   if (not(self.exposed.contains(name))) {
     return name;
   }
   self.exposed[name] = self.resolve(self.exposed[name]);
   return self.exposed[name];
+}
+
+///|
+/// Retrieves the type of a field.
+/// 
+pub fn Env::field_type(self: Env, sty: Name, name: String) -> Type? {
+  if (self._structs.contains(sty)) {
+    let entries = self._structs[sty].entries;
+    if (entries.contains(name)) {
+      return Some(entries[name].ty);
+    }
+  }
+  return None;
 }

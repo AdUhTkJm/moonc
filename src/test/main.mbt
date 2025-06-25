@@ -24,7 +24,7 @@ fn parse(file: String, content: String) -> Unit {
   }
 
   println(ast);
-  // typing(ast);
+  typing(ast);
 }
 
 pub fn typing(ast: @parse.AST) -> Unit {

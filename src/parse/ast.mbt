@@ -157,7 +157,7 @@ pub(all) struct FnDetail {
   tyvars: Array[Typevar]
   kwargs: Array[Kwarg]
   body: AST
-  ty: Type
+  mut ty: Type
   ext: String?
 }
 

@@ -79,7 +79,7 @@ The outer braces are due to a `Block` node that encloses the whole file, which m
 
 ## Type checking
 
-Type checking support is currently very limited. It remains to generate and parse `.mbti` files required for typing.
+Type checking support is currently very limited. Though it now has the capability of parsing and loading `.mbti` files, not all AST types are supported for typing.
 
 # Progress
 
