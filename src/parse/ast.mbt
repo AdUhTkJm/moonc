@@ -51,7 +51,7 @@ pub(all) enum Pattern {
   Char(Char)
   Int(BigInt, IntTy)
   Str(String)
-  Enum(String, Array[Pattern])
+  Enum(Name, Array[Pattern])
   Or(Array[Pattern])
   Tuple(Array[Pattern])
   Struct(Map[String, Pattern], Bool) // bool: has '..'

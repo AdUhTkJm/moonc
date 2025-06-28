@@ -1,3 +1,5 @@
+typealias @parse.Pattern
+
 fn builtin(x: String) -> Name {
   { pack: Some("@builtin"), ns: None, name: x }
 }
@@ -48,6 +50,37 @@ pub fn Env::get_local(self: Env, x: String) -> Type {
 
 pub fn Env::get_local_opt(self: Env, x: String) -> Type? {
   self._locals.get(x).map(fn (x) { x.ty })
+}
+
+///|
+/// Verifies 
+pub fn Env::pattern_match(self: Env, ty: Type, pat: Pattern, from: Loc, to: Loc) -> Unit {
+  match pat {
+    Str(_) => self.unify(ty, String, from, to);
+    Int(_) => self.unify(ty, Int, from, to);
+    Char(_) => self.unify(ty, Char, from, to);
+    Enum(constr, subpat) => {
+      let name = self.resolve(constr);
+      if (not(self._fns.contains(name))) {
+        @diag.error(from, to, "unknown constructor: \{constr.name}");
+        return;
+      }
+      let _fn = self._fns[name];
+      if (subpat.length() != _fn.params.length()) {
+        @diag.error(from, to, "expected \{ _fn.params.length()} arguments, but got \{subpat.length()}");
+      }
+      guard _fn.ty is Function(tys, _);
+      for i, t in tys {
+        self.pattern_match(t, subpat[i], from, to);
+      }
+    }
+    Unknown => @diag.error(from, to, "unknown pattern");
+    Ident(x) => self.add_local(x, ty);
+    _ => {
+      println("unhandled pattern: \{pat}");
+      panic();
+    }
+  }
 }
 
 fn Env::unify_aux(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Type {
@@ -115,6 +148,20 @@ fn Env::unify_aux(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Type {
       }
       Struct(name, arr)
     }
+    (Enum(name, arr), Enum(name2, arr2)) |
+    (Abstract(name, arr), Enum(name2, arr2)) |
+    (Enum(name, arr), Abstract(name2, arr2)) => {
+      let name = self.resolve(name);
+      let name2 = self.resolve(name2);
+      if (name != name2) {
+        @diag.error(from, to, "enums do not have the same name");
+      } else {
+        for i, v in arr {
+          self.unify_aux(v, arr2[i], from, to) |> ignore;
+        }
+      }
+      Enum(name, arr)
+    }
     (Function(args, ret), Function(args2, ret2)) => {
       if (args.length() != args2.length()) {
         @diag.error(from, to, "tuples don't have the same size");
@@ -140,7 +187,7 @@ pub fn Env::unify(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Unit {
 
 pub fn Env::infer(self: Env, x: AST) -> Type {
   let ty: Type = match x.kind {
-    Unit | Leaf => Unit
+    Unit | Leaf | EnumDecl(_) | StructDecl(_) => Unit
     Int(_) => Int
     Bool(_) => Bool
     Char(_) => Char
@@ -148,14 +195,28 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
     Double(_) => Double
     Str(_) => String
     Guard(cond, other) => {
-      self.unify(self.infer(cond), Bool, cond.from, cond.to) |> ignore;
+      self.unify(self.infer(cond), Bool, cond.from, cond.to);
       if (other is Some(other)) {
-        self.unify(self.infer(other), Unit, other.from, other.to) |> ignore;
+        self.unify(self.infer(other), Unit, other.from, other.to);
       }
       Unit
     }
+    Unary(kind, l) => {
+      let ty = self.infer(l);
+      match kind {
+        Minus => ty
+        Not => {
+          self.unify(ty, Bool, x.from, x.to);
+          Bool
+        }
+        _ => {
+          println("unhandled unary: \{ty}");
+          panic()
+        }
+      }
+    }
     Binary(kind, l, r) => {
-      self.unify(self.infer(l), self.infer(r), x.from, x.to) |> ignore;
+      self.unify(self.infer(l), self.infer(r), x.from, x.to);
       match kind {
         And | Or | Lt | Le | Eq | Ne => Bool
         Assign => Unit
@@ -163,11 +224,11 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       }
     }
     BinaryInplace(_, l, r) => {
-      self.unify(self.infer(l), self.infer(r), x.from, x.to) |> ignore;
+      self.unify(self.infer(l), self.infer(r), x.from, x.to);
       Unit
     }
     VarDecl(detail) => {
-      self.unify(detail.ty, self.infer(detail.init), x.from, x.to) |> ignore;
+      self.unify(detail.ty, self.infer(detail.init), x.from, x.to);
       self.new_local(x);
       Unit
     }
@@ -231,6 +292,27 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
         @diag.error(x.from, x.to, "calling a non-function type \{fty}");
         Unit
       }
+    }
+    EnumConstr(name, args) => {
+      let name = self.resolve(name);
+      let ns = name.ns;
+      if (ns is None || not(self._fns.contains(name))) {
+        @diag.error(x.from, x.to, "not an enum constructor");
+        return Unknown;
+      }
+      let _enum = self.resolve(Name::unqualified(name.pack, name.ns.unwrap()));
+      if (not(self._enums.contains(_enum))) {
+        @diag.error(x.from, x.to, "not an enum constructor");
+        return Unknown;
+      }
+      let _fn = self._fns[name];
+      guard _fn.ty is Function(params, ret);
+      if (args.length() != params.length()) {
+        @diag.error(x.from, x.to, "expected \{params.length()} arguments, but got \{args.length()}");
+      } else {
+        params.eachi(fn (i, t) { self.unify(self.infer(args[i]), t, args[i].from, args[i].to) });
+      }
+      ret
     }
     If(cond, body, other) => {
       self.unify(self.infer(cond), Bool, cond.from, cond.to);
@@ -407,6 +489,25 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
         @diag.error(ast.from, ast.to, "type \{ty} does not have any field");
       }
       Unknown
+    }
+    Match(matcher, branches) => {
+      let ty = self.infer(matcher);
+      // Match patterns and the type.
+      for w in branches {
+        self.pattern_match(ty, w.0, w.1.from, w.1.to);
+      }
+      // Ensure all branches are of the same type.
+      if (branches.length() == 0) {
+        @diag.error(x.from, x.to, "match expression must have at least 1 branch");
+        x.ty = Unit;
+        return Unit;
+      }
+      let retTy = self.infer(branches[0].1);
+      for i in 1..<branches.length() {
+        let w = branches[i].1;
+        self.unify(retTy, self.infer(w), w.from, w.to);
+      }
+      retTy
     }
     _ => {
       println(x);

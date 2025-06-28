@@ -514,7 +514,7 @@ fn Parser::base_pattern(self: Parser) -> Pattern {
     Int(x, ty) => Int(x, ty)
     Char(x) => Char(x)
     Str(x) => Str(x)
-    Typename(x) => Enum(x, [])
+    Typename(x) => Enum(Name::unqualified(None, x), [])
     Ident(x) => Ident(x)
     _ => {
       @diag.error(tok.loc, tok.loc.advance(tok.len), "unexpected match pattern");

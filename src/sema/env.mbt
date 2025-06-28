@@ -55,10 +55,21 @@ pub fn Env::bind(self: Env, x: AST) -> Unit {
       ty: detail.ty,
       vis: detail.vis
     };
-
     StructDecl(detail) => self._structs[detail.name] = detail;
-    EnumDecl(detail) => self._enums[detail.name] = detail;
-
+    EnumDecl(detail) => {
+      self._enums[detail.name] = detail;
+      // Record constructors as regular functions.
+      for w in detail.entries {
+        let (name, entry) = w;
+        let _fn = {
+          name: Name::unqualified(None, name), vis: Priv, params: entry.tys.map((_) => ""), kwargs: [],
+          tyvars: [], ty: Function(entry.tys, Enum(detail.name, detail.tyvars.map(x => Typevar(x))))
+        };
+        let fullname = Name::qualified(None, detail.name.name, name);
+        self._fns[fullname] = _fn;
+        self.exposed[Name::unqualified(None, name)] = fullname;
+      }
+    }
     FnDecl(detail) => self._fns[detail.name] = {
       name: detail.name,
       params: detail.params,
@@ -146,6 +157,18 @@ pub fn Env::load(self: Env, detail: PackDetail) -> Unit {
   for _enum in _enums {
     let name = _enum.name.pack(referred);
     self._enums[name] = { .._enum, name };
+    // Record constructors as regular functions.
+    for w in _enum.entries {
+      let (name, entry) = w;
+      let _fn = {
+        name: Name::unqualified(None, name), vis: Priv, params: entry.tys.map((_) => ""), kwargs: [],
+        tyvars: [], ty: Function(entry.tys, Enum(_enum.name, _enum.tyvars.map(x => Typevar(x))))
+      };
+      let fullname = Name::qualified(Some(referred), _enum.name.name, name);
+      self._fns[fullname] = _fn;
+      self.exposed[Name::unqualified(None, name)] = fullname;
+      self.exposed[Name::unqualified(Some(referred), name)] = fullname;
+    }
   }
   for _struct in _structs {
     let name = _struct.name.pack(referred);
