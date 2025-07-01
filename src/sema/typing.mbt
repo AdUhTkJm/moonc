@@ -10,7 +10,9 @@ fn builtin(x: String) -> Name {
 /// The type variables are not looked up; they're directly stuck into the type.
 /// 
 pub fn Env::lookup_type(self: Env, name: Name, tyvars: Array[Type]) -> Type {
+  println("looking up \{name}");
   let name = self.resolve(name);
+  println("resolved: \{name}")
   if (name.standalone() && self.tyvars.contains(name.name)) {
     return self.tyvars[name.name];
   }
@@ -53,14 +55,15 @@ pub fn Env::get_local_opt(self: Env, x: String) -> Type? {
 }
 
 ///|
-/// Verifies 
+/// Verifies the pattern can match a value of type `ty`.
+/// 
 pub fn Env::pattern_match(self: Env, ty: Type, pat: Pattern, from: Loc, to: Loc) -> Unit {
   match pat {
     Str(_) => self.unify(ty, String, from, to);
     Int(_) => self.unify(ty, Int, from, to);
     Char(_) => self.unify(ty, Char, from, to);
     Enum(constr, subpat) => {
-      let name = self.resolve(constr);
+      let name = self.resolve_fn(constr);
       if (not(self._fns.contains(name))) {
         @diag.error(from, to, "unknown constructor: \{constr.name}");
         return;
@@ -85,6 +88,7 @@ pub fn Env::pattern_match(self: Env, ty: Type, pat: Pattern, from: Loc, to: Loc)
 
 fn Env::unify_aux(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Type {
   match (x, y) {
+    (Named(x, arrs), y) | (y, Named(x, arrs)) => self.unify_aux(self.lookup_type(x, arrs), y, from, to);
     (Weak({ val: Weak(_) as x }), y) | (y, Weak({ val: Weak(_) as x })) => {
       self.unify_aux(x, y, from, to);
     }
@@ -129,9 +133,6 @@ fn Env::unify_aux(self: Env, x: Type, y: Type, from: Loc, to: Loc) -> Type {
         x.eachi(fn (i, z) { self.unify_aux(z, y[i], from, to) |> ignore });
       }
       Tuple(x)
-    }
-    (a, Named(b, arr)) | (Named(b, arr), a) => {
-      self.unify_aux(a, self.lookup_type(b, arr), from, to);
     }
     (FixedArray(x), FixedArray(y)) => self.unify_aux(x, y, from, to);
     (Struct(name, arr), Struct(name2, arr2)) |
@@ -233,7 +234,7 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       Unit
     }
     VarRef(name) => {
-      let name = self.resolve(name);
+      let name = self.resolve_fn(name);
       if (name.ns is None && name.pack is None) {
         if (self._locals.contains(name.name)) {
           self.unify(x.ty, self.get_local(name.name), x.from, x.to);
@@ -294,13 +295,13 @@ pub fn Env::infer(self: Env, x: AST) -> Type {
       }
     }
     EnumConstr(name, args) => {
-      let name = self.resolve(name);
+      let name = self.resolve_fn(name);
       let ns = name.ns;
       if (ns is None || not(self._fns.contains(name))) {
         @diag.error(x.from, x.to, "not an enum constructor");
         return Unknown;
       }
-      let _enum = self.resolve(Name::unqualified(name.pack, name.ns.unwrap()));
+      let _enum = self.resolve_fn(Name::unqualified(name.pack, name.ns.unwrap()));
       if (not(self._enums.contains(_enum))) {
         @diag.error(x.from, x.to, "not an enum constructor");
         return Unknown;

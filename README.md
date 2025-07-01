@@ -81,6 +81,8 @@ The outer braces are due to a `Block` node that encloses the whole file, which m
 
 Type checking support is currently very limited. Though it now has the capability of parsing and loading `.mbti` files, not all AST types are supported for typing.
 
+It can give types to basic language constructs, including literals, loops, arrays and enums. It also supports some pattern matching features. Some advanced structures are not yet covered.
+
 # Progress
 
 Currently the compiler is able to parse itself in entirety, and it can also parse most files in `core/builtin`.

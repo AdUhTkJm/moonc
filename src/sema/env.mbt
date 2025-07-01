@@ -36,6 +36,7 @@ pub(all) struct Env {
   _abstracts: Map[Name, AbstractDetail]
   // Maps a short-hand name into its full name (or another name in `exposed`).
   exposed: Map[Name, Name]
+  exposed_fns: Map[Name, Name]
   // We only map names of tyvars into the type itself.
   mut tyvars: Map[String, Type]
   // Also, map names to tyvars into the traits they'd need to implement.
@@ -67,7 +68,7 @@ pub fn Env::bind(self: Env, x: AST) -> Unit {
         };
         let fullname = Name::qualified(None, detail.name.name, name);
         self._fns[fullname] = _fn;
-        self.exposed[Name::unqualified(None, name)] = fullname;
+        self.exposed_fns[Name::unqualified(None, name)] = fullname;
       }
     }
     FnDecl(detail) => self._fns[detail.name] = {
@@ -93,6 +94,7 @@ pub fn Env::empty() -> Env {
     _traits: Map::new(),
     _abstracts: Map::new(),
     exposed: Map::new(),
+    exposed_fns: Map::new(),
     tyvars: Map::new(),
     tyvar_traits: Map::new(),
     curr_fn: None,
@@ -166,8 +168,8 @@ pub fn Env::load(self: Env, detail: PackDetail) -> Unit {
       };
       let fullname = Name::qualified(Some(referred), _enum.name.name, name);
       self._fns[fullname] = _fn;
-      self.exposed[Name::unqualified(None, name)] = fullname;
-      self.exposed[Name::unqualified(Some(referred), name)] = fullname;
+      self.exposed_fns[Name::unqualified(None, name)] = fullname;
+      self.exposed_fns[Name::unqualified(Some(referred), name)] = fullname;
     }
   }
   for _struct in _structs {
@@ -186,7 +188,7 @@ pub fn Env::load(self: Env, detail: PackDetail) -> Unit {
 
   if (fullname == "moonbitlang/core/builtin") {
     for _fn in _fns {
-      self.exposed[_fn.name] = _fn.name.pack(referred);
+      self.exposed_fns[_fn.name] = _fn.name.pack(referred);
     }
     for _enum in _enums {
       self.exposed[_enum.name] = _enum.name.pack(referred);
@@ -204,7 +206,7 @@ pub fn Env::load(self: Env, detail: PackDetail) -> Unit {
 }
 
 ///|
-/// Resolves (canonicalizes) the name.
+/// Resolves (canonicalizes) the name of a type.
 /// 
 pub fn Env::resolve(self: Env, name: Name) -> Name {
   if (not(self.exposed.contains(name))) {
@@ -212,6 +214,17 @@ pub fn Env::resolve(self: Env, name: Name) -> Name {
   }
   self.exposed[name] = self.resolve(self.exposed[name]);
   return self.exposed[name];
+}
+
+///|
+/// Resolves (canonicalizes) the name of a function.
+/// 
+pub fn Env::resolve_fn(self: Env, name: Name) -> Name {
+  if (not(self.exposed_fns.contains(name))) {
+    return name;
+  }
+  self.exposed_fns[name] = self.resolve(self.exposed_fns[name]);
+  return self.exposed_fns[name];
 }
 
 ///|
